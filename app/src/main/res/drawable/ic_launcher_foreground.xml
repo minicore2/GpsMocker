@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Pin body -->
+    <path
+        android:fillColor="#00E5FF"
+        android:pathData="M54,18 C42.95,18 34,26.95 34,38 C34,53.5 54,80 54,80 C54,80 74,53.5 74,38 C74,26.95 65.05,18 54,18 Z"/>
+
+    <!-- Pin inner circle (dark cutout) drawn as path -->
+    <path
+        android:fillColor="#0F1117"
+        android:pathData="M54,29 A9,9 0 1,0 54.001,29 Z"/>
+
+</vector>
