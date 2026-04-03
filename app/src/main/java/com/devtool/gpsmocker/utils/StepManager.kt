@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.time.Instant
 
 object StepManager {
 
@@ -13,14 +14,13 @@ object StepManager {
 
     enum class Backend { HEALTH_CONNECT, LOCAL }
 
-    // Runtime active backend (may differ from preferred if HC unavailable)
     var activeBackend: Backend = Backend.LOCAL
         private set
 
-    var backendLabel: String = "本地計步"
+    var backendLabel: String = "本地計步 💾"
         private set
 
-    // ── User preference ───────────────────────────
+    // ── Preference ────────────────────────────────
 
     fun getPreferredBackend(context: Context): Backend {
         val saved = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -31,18 +31,13 @@ object StepManager {
     fun setPreferredBackend(context: Context, backend: Backend) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit().putString(KEY_PREFERRED, backend.name).apply()
-        Log.d(TAG, "Preferred backend set to $backend")
+        Log.d(TAG, "Preferred backend → $backend")
     }
 
     // ── Init ──────────────────────────────────────
 
-    /**
-     * Determine which backend to actually use.
-     * Respects the user's preference but degrades gracefully.
-     */
     suspend fun init(context: Context): Backend = withContext(Dispatchers.IO) {
         val preferred = getPreferredBackend(context)
-
         activeBackend = when {
             preferred == Backend.HEALTH_CONNECT &&
             HealthConnectHelper.isAvailable(context) &&
@@ -51,9 +46,7 @@ object StepManager {
                 Backend.HEALTH_CONNECT
             }
             preferred == Backend.HEALTH_CONNECT &&
-            HealthConnectHelper.isAvailable(context) &&
-            !HealthConnectHelper.hasPermissions(context) -> {
-                // Available but no permission yet — stay local until granted
+            HealthConnectHelper.isAvailable(context) -> {
                 backendLabel = "本地計步 💾（HC 待授權）"
                 Backend.LOCAL
             }
@@ -86,16 +79,26 @@ object StepManager {
     // ── Write ─────────────────────────────────────
 
     /**
-     * Add steps. Always writes to local store.
-     * Also writes to HC when active backend is HC.
-     * Returns new local total.
+     * Record [delta] steps that occurred between [startTime] and [endTime].
+     * Passing real timestamps ensures Google Fit shows the steps in the correct
+     * time bucket and doesn't silently discard them as "unknown source".
      */
-    suspend fun addSteps(context: Context, delta: Int): Long = withContext(Dispatchers.IO) {
+    suspend fun addSteps(
+        context: Context,
+        delta: Int,
+        startTime: Instant = Instant.now().minusSeconds(delta.toLong().coerceAtLeast(1)),
+        endTime: Instant   = Instant.now()
+    ): Long = withContext(Dispatchers.IO) {
         if (delta <= 0) return@withContext LocalStepStore.getTodaySteps(context)
+
+        // Always write locally first (instant, never fails)
         val localTotal = LocalStepStore.addSteps(context, delta)
+
+        // Write to Health Connect with proper time range + Device info
         if (activeBackend == Backend.HEALTH_CONNECT) {
-            val ok = HealthConnectHelper.writeSteps(context, delta)
+            val ok = HealthConnectHelper.writeSteps(context, delta, startTime, endTime)
             if (!ok) {
+                Log.w(TAG, "HC write failed → downgrade to local")
                 activeBackend = Backend.LOCAL
                 backendLabel  = "本地計步 💾（HC 寫入失敗）"
             }

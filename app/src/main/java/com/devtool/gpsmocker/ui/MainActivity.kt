@@ -21,6 +21,7 @@ import com.devtool.gpsmocker.utils.HealthConnectHelper
 import com.devtool.gpsmocker.utils.LocalStepStore
 import com.devtool.gpsmocker.utils.StepManager
 import kotlinx.coroutines.launch
+import java.time.Instant
 import org.osmdroid.config.Configuration
 import org.osmdroid.events.MapEventsReceiver
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
@@ -56,6 +57,8 @@ class MainActivity : AppCompatActivity() {
     private var baseSteps    = 0L
     private var sessionSteps = 0
     private var pendingWrite = 0
+    private var stepWindowStart: Instant = Instant.now()  // start of current step batch
+    private var stepWindowEnd:   Instant = Instant.now()  // end of current step batch
     companion object { const val WRITE_EVERY_N = 20 }
 
     // ── Health Connect permission contract ────────
@@ -167,9 +170,13 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun flushSteps(delta: Int) {
+    private fun flushSteps(
+        delta: Int,
+        start: Instant = stepWindowStart,
+        end:   Instant = stepWindowEnd
+    ) {
         if (delta <= 0) return
-        lifecycleScope.launch { StepManager.addSteps(this@MainActivity, delta) }
+        lifecycleScope.launch { StepManager.addSteps(this@MainActivity, delta, start, end) }
     }
 
     // ─────────────────────────────────────────────
@@ -359,16 +366,20 @@ class MainActivity : AppCompatActivity() {
             Mode.ROUTE -> {
                 if (waypoints.size < 2) { toast("至少需要 2 個航點"); return }
                 placeMovingMarker(waypoints.first())
-                svc.onLocationUpdate = { pt, segIdx, totalSegs, newSteps ->
+                svc.onLocationUpdate = { pt, segIdx, totalSegs, newSteps, tickStart, tickEnd ->
                     runOnUiThread {
                         movingMarker?.position = pt
                         binding.map.invalidate()
                         if (newSteps > 0) {
+                            // Track real time window for this batch of steps
+                            if (pendingWrite == 0) stepWindowStart = tickStart
+                            stepWindowEnd = tickEnd
                             sessionSteps += newSteps
                             pendingWrite += newSteps
                             updateStepDisplay()
                             if (pendingWrite >= WRITE_EVERY_N) {
-                                flushSteps(pendingWrite); pendingWrite = 0
+                                flushSteps(pendingWrite, stepWindowStart, stepWindowEnd)
+                                pendingWrite = 0
                             }
                         }
                         binding.tvCoords.text =
