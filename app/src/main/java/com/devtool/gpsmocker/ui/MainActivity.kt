@@ -9,13 +9,18 @@ import android.preference.PreferenceManager
 import android.widget.SeekBar
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.health.connect.client.PermissionController
+import androidx.lifecycle.lifecycleScope
 import com.devtool.gpsmocker.R
 import com.devtool.gpsmocker.databinding.ActivityMainBinding
 import com.devtool.gpsmocker.service.MockLocationService
-import com.devtool.gpsmocker.utils.FitHelper
-import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.devtool.gpsmocker.utils.HealthConnectHelper
+import com.devtool.gpsmocker.utils.LocalStepStore
+import com.devtool.gpsmocker.utils.StepManager
+import kotlinx.coroutines.launch
 import org.osmdroid.config.Configuration
 import org.osmdroid.events.MapEventsReceiver
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
@@ -36,10 +41,8 @@ class MainActivity : AppCompatActivity() {
     enum class Mode { FIXED, ROUTE }
     private var mode = Mode.FIXED
 
-    // ── Fixed-point state ─────────────────────────
+    // ── Map overlays ──────────────────────────────
     private var fixedMarker: Marker? = null
-
-    // ── Route state ───────────────────────────────
     private val waypoints       = mutableListOf<GeoPoint>()
     private val waypointMarkers = mutableListOf<Marker>()
     private val routeLines      = mutableListOf<Polyline>()
@@ -49,15 +52,28 @@ class MainActivity : AppCompatActivity() {
     // ── Speed ─────────────────────────────────────
     private var currentSpeedMps = 1.5
 
-    // ── Google Fit / Steps ────────────────────────
-    private var fitBaseSteps    = 0L
-    private var sessionSteps    = 0
-    private var pendingFitWrite = 0
-    private var fitOAuthPending = false   // prevent repeated OAuth popup on onResume
+    // ── Steps ─────────────────────────────────────
+    private var baseSteps    = 0L
+    private var sessionSteps = 0
+    private var pendingWrite = 0
+    companion object { const val WRITE_EVERY_N = 20 }
 
-    private companion object {
-        const val FIT_REQUEST_CODE  = 1001
-        const val FIT_WRITE_EVERY_N = 20
+    // ── Health Connect permission contract ────────
+    // Must use PermissionController.createRequestPermissionResultContract()
+    // This is the ONLY correct way to request HC permissions
+    private val hcPermLauncher = registerForActivityResult(
+        PermissionController.createRequestPermissionResultContract()
+    ) { granted ->
+        lifecycleScope.launch {
+            if (granted.containsAll(HealthConnectHelper.PERMISSIONS)) {
+                toast("✅ Health Connect 授權成功")
+                initStepsBackend()
+            } else {
+                toast("⚠️ Health Connect 未完全授權，改用本地計步")
+                StepManager.setPreferredBackend(this@MainActivity, StepManager.Backend.LOCAL)
+                initStepsBackend()
+            }
+        }
     }
 
     // ─────────────────────────────────────────────
@@ -75,143 +91,85 @@ class MainActivity : AppCompatActivity() {
         setupModeToggle()
         setupSpeedSlider()
         setupButtons()
-
-        // Step 1: request location permission → then start service
         requestLocationPermissionThenStart()
-
-        // Step 2: Fit - silently try; if no account show "tap 🔄 to connect"
-        initFitPassive()
+        lifecycleScope.launch { initStepsBackend() }
     }
 
-    override fun onResume() {
-        super.onResume()
-        binding.map.onResume()
-        // Only silently try to read steps if we think we're already authorized.
-        // Never auto-launch OAuth here — that causes infinite loops.
-        if (FitHelper.hasPermission(this)) {
-            readFitSteps()
-        }
-    }
-
-    override fun onPause() {
-        super.onPause()
-        binding.map.onPause()
-    }
-
+    override fun onResume()  { super.onResume(); binding.map.onResume() }
+    override fun onPause()   { super.onPause();  binding.map.onPause()  }
     override fun onDestroy() {
         if (serviceBound) { unbindService(serviceConnection); serviceBound = false }
         super.onDestroy()
     }
 
     // ─────────────────────────────────────────────
-    // Google Fit
+    // Steps backend
     // ─────────────────────────────────────────────
-
-    // ─────────────────────────────────────────────
-    // Google Fit
-    // ─────────────────────────────────────────────
-
-    /** Called once on create. Does NOT show any popup — just tries silently. */
-    private fun initFitPassive() {
-        val actRecGranted = ContextCompat.checkSelfPermission(
-            this, Manifest.permission.ACTIVITY_RECOGNITION
-        ) == PackageManager.PERMISSION_GRANTED
-
-        when {
-            !actRecGranted -> {
-                binding.tvFitSteps.text = "👟 步數：點 🔄 連接 Google Fit"
-            }
-            FitHelper.hasPermission(this) -> {
-                readFitSteps()
-            }
-            else -> {
-                binding.tvFitSteps.text = "👟 步數：點 🔄 連接 Google Fit"
-            }
-        }
-    }
-
-    /**
-     * Called ONLY when user explicitly taps 🔄.
-     * This is the ONLY place that launches OAuth or permission dialogs.
-     */
-    private fun connectFit() {
-        // 1. ACTIVITY_RECOGNITION runtime permission
-        val actRecGranted = ContextCompat.checkSelfPermission(
-            this, Manifest.permission.ACTIVITY_RECOGNITION
-        ) == PackageManager.PERMISSION_GRANTED
-
-        if (!actRecGranted) {
-            activityRecognitionLauncher.launch(Manifest.permission.ACTIVITY_RECOGNITION)
-            return
-        }
-
-        // 2. If we already have an account, just read steps (OAuth may already be done)
-        if (FitHelper.hasPermission(this)) {
-            readFitSteps()
-            return
-        }
-
-        // 3. Need OAuth — launch once
-        fitOAuthPending = true
-        binding.tvFitSteps.text = "👟 步數：請在彈出視窗授權…"
-        val account = GoogleSignIn.getAccountForExtension(this, FitHelper.fitnessOptions)
-        GoogleSignIn.requestPermissions(this, FIT_REQUEST_CODE, account, FitHelper.fitnessOptions)
-    }
-
-    private val activityRecognitionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted) {
-            // Got ACTIVITY_RECOGNITION — now check OAuth
-            if (FitHelper.hasPermission(this)) {
-                readFitSteps()
-            } else {
-                fitOAuthPending = true
-                val account = GoogleSignIn.getAccountForExtension(this, FitHelper.fitnessOptions)
-                GoogleSignIn.requestPermissions(this, FIT_REQUEST_CODE, account, FitHelper.fitnessOptions)
-            }
-        } else {
-            binding.tvFitSteps.text = "👟 步數：需要活動辨識權限（點 🔄 重試）"
-        }
-    }
-
-    @Deprecated("onActivityResult")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == FIT_REQUEST_CODE) {
-            fitOAuthPending = false
-            if (resultCode == RESULT_OK) {
-                readFitSteps()
-            } else {
-                binding.tvFitSteps.text = "👟 步數：授權被拒（點 🔄 重試）"
-            }
-        }
-    }
-
-    private fun readFitSteps() {
-        binding.tvFitSteps.text = "👟 今日步數：讀取中…"
-        FitHelper.readTodaySteps(this) { steps ->
-            runOnUiThread {
-                when {
-                    steps < 0 -> binding.tvFitSteps.text = "👟 步數：授權失敗，請點 🔄"
-                    else -> {
-                        fitBaseSteps = steps
-                        sessionSteps = 0
-                        updateStepDisplay()
-                    }
-                }
-            }
-        }
+    private suspend fun initStepsBackend() {
+        runOnUiThread { binding.tvFitSteps.text = "👟 步數：初始化中…" }
+        StepManager.init(this)
+        val steps = StepManager.readTodaySteps(this)
+        baseSteps    = if (steps < 0) LocalStepStore.getTodaySteps(this) else steps
+        sessionSteps = 0
+        runOnUiThread { updateStepDisplay() }
     }
 
     private fun updateStepDisplay() {
-        val total = fitBaseSteps + sessionSteps
-        binding.tvFitSteps.text = "👟 今日步數：$total 步（+$sessionSteps 本次）"
+        val total = baseSteps + sessionSteps
+        binding.tvFitSteps.text = "${StepManager.backendLabel}：$total 步（+$sessionSteps）"
     }
 
-    private fun flushStepsToFit(delta: Int) {
-        if (delta <= 0 || !FitHelper.hasPermission(this)) return
-        FitHelper.writeSteps(this, delta)
+    /** 🔄 button — show backend selector */
+    private fun showStepSettings() {
+        val hcAvailable = HealthConnectHelper.isAvailable(this)
+        val current     = StepManager.getPreferredBackend(this)
+
+        val options = if (hcAvailable) {
+            arrayOf("❤️ Health Connect（同步健康 App）", "💾 本地計步（無需授權）")
+        } else {
+            arrayOf("❤️ Health Connect（此裝置不支援）", "💾 本地計步（無需授權）")
+        }
+
+        AlertDialog.Builder(this, R.style.AlertDialogDark)
+            .setTitle("步數來源設定")
+            .setSingleChoiceItems(
+                options,
+                if (current == StepManager.Backend.HEALTH_CONNECT) 0 else 1
+            ) { dialog, which ->
+                dialog.dismiss()
+                when (which) {
+                    0 -> selectHealthConnect(hcAvailable)
+                    1 -> {
+                        StepManager.setPreferredBackend(this, StepManager.Backend.LOCAL)
+                        lifecycleScope.launch { initStepsBackend() }
+                        toast("已切換為本地計步")
+                    }
+                }
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun selectHealthConnect(available: Boolean) {
+        if (!available) {
+            toast("此裝置不支援 Health Connect")
+            return
+        }
+        StepManager.setPreferredBackend(this, StepManager.Backend.HEALTH_CONNECT)
+        lifecycleScope.launch {
+            if (HealthConnectHelper.hasPermissions(this@MainActivity)) {
+                // Already authorized
+                initStepsBackend()
+            } else {
+                // Launch the correct HC permission request
+                hcPermLauncher.launch(HealthConnectHelper.PERMISSIONS)
+            }
+        }
+    }
+
+    private fun flushSteps(delta: Int) {
+        if (delta <= 0) return
+        lifecycleScope.launch { StepManager.addSteps(this@MainActivity, delta) }
     }
 
     // ─────────────────────────────────────────────
@@ -243,17 +201,17 @@ class MainActivity : AppCompatActivity() {
     // ─────────────────────────────────────────────
     private fun addWaypoint(point: GeoPoint) {
         waypoints.add(point)
-        val idx = waypoints.size
         val marker = Marker(binding.map).apply {
             position = point
-            title    = if (idx == 1) "🟢 起點" else "🔵 P$idx"
+            title    = if (waypoints.size == 1) "🟢 起點" else "🔵 P${waypoints.size}"
             setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-            icon = if (idx == 1) ContextCompat.getDrawable(this@MainActivity, R.drawable.ic_marker_start)
-                   else          ContextCompat.getDrawable(this@MainActivity, R.drawable.ic_marker_mid)
+            icon = if (waypoints.size == 1)
+                ContextCompat.getDrawable(this@MainActivity, R.drawable.ic_marker_start)
+            else
+                ContextCompat.getDrawable(this@MainActivity, R.drawable.ic_marker_mid)
         }
         waypointMarkers.add(marker)
         binding.map.overlays.add(marker)
-
         if (waypoints.size >= 2) {
             val line = Polyline(binding.map).apply {
                 setPoints(listOf(waypoints[waypoints.size - 2], point))
@@ -299,8 +257,8 @@ class MainActivity : AppCompatActivity() {
             waypoints.isEmpty() -> "點選地圖新增航點"
             waypoints.size == 1 -> "🟢 起點：${fmtCoord(waypoints[0])}\n繼續點選新增更多航點"
             else -> {
-                val dist    = (0 until waypoints.size - 1).sumOf { haversineMeters(waypoints[it], waypoints[it + 1]) }
-                val eta     = (dist / currentSpeedMps).toInt()
+                val dist     = (0 until waypoints.size - 1).sumOf { haversineMeters(waypoints[it], waypoints[it + 1]) }
+                val eta      = (dist / currentSpeedMps).toInt()
                 val estSteps = (dist / MockLocationService.METRES_PER_STEP).toInt()
                 "📍 ${waypoints.size} 個航點｜${"%.0f".format(dist)}m\n" +
                 "速度 ${"%.1f".format(currentSpeedMps)} m/s｜${eta}s｜預計 ~$estSteps 步"
@@ -321,8 +279,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun switchMode() {
-        stopAll()
-        clearAllOverlays()
+        stopAll(); clearAllOverlays()
         when (mode) {
             Mode.FIXED -> {
                 binding.tvCoords.text   = "點選地圖設定固定位置"
@@ -356,10 +313,7 @@ class MainActivity : AppCompatActivity() {
         })
     }
 
-    private fun sliderToSpeed(progress: Int): Double {
-        val minS = 0.5; val maxS = 20.0
-        return minS * Math.pow(maxS / minS, progress / 100.0)
-    }
+    private fun sliderToSpeed(p: Int): Double = 0.5 * Math.pow(40.0, p / 100.0)
 
     private fun updateSpeedLabel(mps: Double) {
         binding.tvSpeed.text = "⚡ ${"%.1f".format(mps)} m/s  " + when {
@@ -382,17 +336,17 @@ class MainActivity : AppCompatActivity() {
         binding.btnUndoWp.setOnClickListener    { removeLastWaypoint() }
         binding.btnLoopRoute.setOnCheckedChangeListener { _, checked -> loopEnabled = checked }
         binding.btnAbout.setOnClickListener     { startActivity(Intent(this, AboutActivity::class.java)) }
-        binding.btnRefreshFit.setOnClickListener { connectFit() }
+        // 🔄 now opens step source settings
+        binding.btnRefreshFit.setOnClickListener { showStepSettings() }
     }
 
     // ─────────────────────────────────────────────
-    // Start / Stop mocking
+    // Start / Stop
     // ─────────────────────────────────────────────
     private fun startMocking() {
         val svc = mockService ?: run { toast("服務尚未連接，請稍候"); return }
-        svc.speedMps    = currentSpeedMps
-        sessionSteps    = 0
-        pendingFitWrite = 0
+        svc.speedMps = currentSpeedMps
+        sessionSteps = 0; pendingWrite = 0
         updateStepDisplay()
 
         when (mode) {
@@ -405,22 +359,18 @@ class MainActivity : AppCompatActivity() {
             Mode.ROUTE -> {
                 if (waypoints.size < 2) { toast("至少需要 2 個航點"); return }
                 placeMovingMarker(waypoints.first())
-
                 svc.onLocationUpdate = { pt, segIdx, totalSegs, newSteps ->
                     runOnUiThread {
                         movingMarker?.position = pt
                         binding.map.invalidate()
-
                         if (newSteps > 0) {
-                            sessionSteps    += newSteps
-                            pendingFitWrite += newSteps
+                            sessionSteps += newSteps
+                            pendingWrite += newSteps
                             updateStepDisplay()
-                            if (pendingFitWrite >= FIT_WRITE_EVERY_N) {
-                                flushStepsToFit(pendingFitWrite)
-                                pendingFitWrite = 0
+                            if (pendingWrite >= WRITE_EVERY_N) {
+                                flushSteps(pendingWrite); pendingWrite = 0
                             }
                         }
-
                         binding.tvCoords.text =
                             "🚶 ${fmtCoord(pt)}\n段落 ${segIdx + 1}/$totalSegs｜" +
                             "${"%.1f".format(currentSpeedMps)} m/s｜本次 $sessionSteps 步"
@@ -428,11 +378,10 @@ class MainActivity : AppCompatActivity() {
                 }
                 svc.onRouteFinished = {
                     runOnUiThread {
-                        if (pendingFitWrite > 0) { flushStepsToFit(pendingFitWrite); pendingFitWrite = 0 }
+                        if (pendingWrite > 0) { flushSteps(pendingWrite); pendingWrite = 0 }
                         setRunningUI(false)
-                        toast("🏁 路線完成！共 $sessionSteps 步已寫入 Google Fit")
-                        // Refresh displayed total from Fit
-                        if (FitHelper.hasPermission(this)) readFitSteps()
+                        toast("🏁 路線完成！共 $sessionSteps 步")
+                        lifecycleScope.launch { initStepsBackend() }
                     }
                 }
                 svc.startRoute(waypoints.toList(), loopEnabled)
@@ -443,7 +392,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun stopAll() {
-        if (pendingFitWrite > 0) { flushStepsToFit(pendingFitWrite); pendingFitWrite = 0 }
+        if (pendingWrite > 0) { flushSteps(pendingWrite); pendingWrite = 0 }
         mockService?.stopMocking()
         movingMarker?.let { binding.map.overlays.remove(it) }
         movingMarker = null
@@ -488,20 +437,19 @@ class MainActivity : AppCompatActivity() {
         movingMarker?.let { binding.map.overlays.remove(it) }; movingMarker = null
         waypointMarkers.forEach { binding.map.overlays.remove(it) }; waypointMarkers.clear()
         routeLines.forEach { binding.map.overlays.remove(it) }; routeLines.clear()
-        waypoints.clear()
-        binding.map.invalidate()
+        waypoints.clear(); binding.map.invalidate()
     }
 
     // ─────────────────────────────────────────────
-    // Service binding
+    // Service
     // ─────────────────────────────────────────────
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, binder: IBinder) {
-            mockService  = (binder as MockLocationService.LocalBinder).getService()
+            mockService = (binder as MockLocationService.LocalBinder).getService()
             serviceBound = true
         }
         override fun onServiceDisconnected(name: ComponentName) {
-            mockService  = null; serviceBound = false
+            mockService = null; serviceBound = false
         }
     }
 
@@ -511,30 +459,20 @@ class MainActivity : AppCompatActivity() {
         bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
     }
 
-    // ─────────────────────────────────────────────
-    // Location permission → start service
-    // ─────────────────────────────────────────────
     private fun requestLocationPermissionThenStart() {
-        val locationPerms = listOf(
-            Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.ACCESS_COARSE_LOCATION
-        )
-        val alreadyGranted = locationPerms.all {
-            ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
-        }
-        if (alreadyGranted) {
+        val perms = listOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
+        if (perms.all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }) {
             bindMockService()
         } else {
-            permissionLauncher.launch(locationPerms.toTypedArray())
+            locationPermLauncher.launch(perms.toTypedArray())
         }
     }
 
-    private val permissionLauncher = registerForActivityResult(
+    private val locationPermLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { results ->
-        val granted = results[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
-                      results[Manifest.permission.ACCESS_COARSE_LOCATION] == true
-        if (granted) {
+        if (results[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+            results[Manifest.permission.ACCESS_COARSE_LOCATION] == true) {
             bindMockService()
         } else {
             toast("⚠️ 需要位置權限才能啟動 GPS 模擬服務")
@@ -551,7 +489,7 @@ class MainActivity : AppCompatActivity() {
     private fun haversineMeters(a: GeoPoint, b: GeoPoint): Double {
         val r    = 6371000.0
         val lat1 = Math.toRadians(a.latitude); val lat2 = Math.toRadians(b.latitude)
-        val dLat = Math.toRadians(b.latitude  - a.latitude)
+        val dLat = Math.toRadians(b.latitude - a.latitude)
         val dLon = Math.toRadians(b.longitude - a.longitude)
         val h    = Math.sin(dLat/2).pow(2) + Math.cos(lat1)*Math.cos(lat2)*Math.sin(dLon/2).pow(2)
         return 2 * r * Math.asin(Math.sqrt(h))

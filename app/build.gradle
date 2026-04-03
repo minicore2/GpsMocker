@@ -5,7 +5,7 @@ plugins {
 
 android {
     namespace 'com.devtool.gpsmocker'
-    compileSdk 34
+    compileSdk 36
 
     defaultConfig {
         applicationId "com.devtool.gpsmocker"
@@ -51,7 +51,6 @@ dependencies {
     // Coroutines
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
 
-    // Google Fit
-    implementation 'com.google.android.gms:play-services-fitness:21.1.0'
-    implementation 'com.google.android.gms:play-services-auth:21.0.0'
+    // Health Connect — 1.1.0-rc01+ required for Android 14 built-in HC support
+    implementation 'androidx.health.connect:connect-client:1.1.0-rc01'
 }

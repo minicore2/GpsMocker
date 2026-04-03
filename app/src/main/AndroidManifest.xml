@@ -1,32 +1,33 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Internet for OSMDroid tile download -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-
-    <!-- Location permissions -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-
-    <!-- Mock location - must be set as Mock Location App in Developer Options -->
     <uses-permission android:name="android.permission.ACCESS_MOCK_LOCATION"
-        tools:ignore="MockLocation"
-        xmlns:tools="http://schemas.android.com/tools"/>
-
-    <!-- Foreground service for continuous location injection -->
+        tools:ignore="MockLocation"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
-
-    <!-- Keep screen on while mocking -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
-
-    <!-- Google Fit step count requires activity recognition on API 29+ -->
-    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
-
-    <!-- Write to external for OSMDroid tile cache -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
+
+    <!-- Health Connect permissions
+         Android 13: granted by standalone HC app
+         Android 14: granted by system-built-in HC -->
+    <uses-permission android:name="android.permission.health.READ_STEPS" />
+    <uses-permission android:name="android.permission.health.WRITE_STEPS" />
+
+    <!-- Required on Android 14+ so PackageManager can resolve the
+         Health Connect provider and getSdkStatus() works correctly -->
+    <queries>
+        <package android:name="com.google.android.apps.healthdata" />
+        <intent>
+            <action android:name="androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE" />
+        </intent>
+    </queries>
 
     <application
         android:allowBackup="true"
@@ -47,17 +48,24 @@
             </intent-filter>
         </activity>
 
-        <!-- Foreground service for GPS injection -->
-        <service
-            android:name=".service.MockLocationService"
-            android:foregroundServiceType="location"
-            android:exported="false" />
+        <!-- Health Connect rationale screen (required by HC policy) -->
+        <activity
+            android:name=".ui.PermissionRationaleActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE" />
+            </intent-filter>
+        </activity>
 
-        <!-- About / developer info screen -->
         <activity
             android:name=".ui.AboutActivity"
             android:exported="false"
             android:parentActivityName=".ui.MainActivity" />
+
+        <service
+            android:name=".service.MockLocationService"
+            android:foregroundServiceType="location"
+            android:exported="false" />
 
     </application>
 </manifest>

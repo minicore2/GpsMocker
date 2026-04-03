@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:gravity="center"
+    android:padding="32dp"
+    android:background="@color/bg_dark">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="👟"
+        android:textSize="48sp"
+        android:layout_marginBottom="16dp"/>
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="為何需要步數權限？"
+        android:textColor="@color/accent"
+        android:textSize="20sp"
+        android:textStyle="bold"
+        android:layout_marginBottom="16dp"/>
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="GPS Mocker 在模擬路線移動時，會根據移動距離（每 0.4 公尺計 1 步）將步數寫入 Health Connect，讓 Google Fit、Samsung Health 等健康 App 能同步顯示正確的步數記錄。\n\n讀取步數是為了在 App 啟動時顯示今日累積步數。"
+        android:textColor="@color/text_primary"
+        android:textSize="14sp"
+        android:lineSpacingMultiplier="1.5"
+        android:layout_marginBottom="32dp"
+        android:gravity="center"/>
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btnRationaleOk"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="了解，繼續授權"
+        android:backgroundTint="@color/accent"
+        android:textColor="@color/bg_dark"
+        android:textStyle="bold"/>
+
+</LinearLayout>

@@ -9,4 +9,10 @@
         <item name="android:statusBarColor">@color/surface</item>
         <item name="android:windowBackground">@color/bg_dark</item>
     </style>
+
+    <style name="AlertDialogDark" parent="ThemeOverlay.Material3.MaterialAlertDialog">
+        <item name="colorSurface">@color/surface</item>
+        <item name="colorOnSurface">@color/text_primary</item>
+        <item name="colorPrimary">@color/accent</item>
+    </style>
 </resources>
