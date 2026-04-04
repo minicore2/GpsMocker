@@ -7,7 +7,7 @@ Android GPS 模擬工具，專為開發者測試位置功能設計。
 | 模式 | 說明 |
 |------|------|
 | **模式一：固定點** | 點選地圖任意位置，App 持續發送該座標為假 GPS |
-| **模式二：路線移動** | 設定起點 + 終點，以 **1.5 m/s** 速度線性移動座標 |
+| **模式二：路線移動** | 設定起點 + 終點，以 **1.5 m/s(可設定)** 速度線性移動座標 |
 
 ---
 
@@ -16,6 +16,12 @@ Android GPS 模擬工具，專為開發者測試位置功能設計。
 - Android Studio Hedgehog 以上
 - Android 10+ (API 29+)
 - 手機需開啟**開發者模式**
+
+已測試:
+1. Samsung A22 (Android 13 Samsung原廠)
+2. Samsung Galaxy S10+ (Android 13 Pixel Experience ROM) 
+3. Mi 11 Ultra (Android 14 Mi HyperOS 2.0)
+
 
 ---
 
@@ -51,6 +57,17 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 3. 再次點選地圖設定**終點**（紅色標記）
 4. 按「▶ 開始」→ 座標以 1.5 m/s 從起點向終點移動
 5. 抵達終點後會停在終點繼續發送
+
+完整動作方式：
+1. 安裝PikminGPSMocker
+2. 開啟手機開發者模式，請參照網路各家手機開啟方式。
+3. 進入手機設定，開發人員選項，拉到最下方點擊選取模擬位置應用程式，點擊GPS Mocker。
+4. 進入Google Play安裝Google Health Connect(Android 13以前，Android 14後已內建)還有Google Fit。
+5. 進入Health Connect，拉到權限和資料，點擊應用程式權限。
+6. 點擊GPSMocker選擇全部允許（步數）。確認Google Fit也能允許讀取。
+7. 開啟Google Fit選擇右下方個人資料。點擊上方照片旁的齒輪進入設定。到健康資料同步選項，打開讓Fit與健康資料同步。下方追蹤偏好設定項將追蹤你的活動給關閉。
+8. 在遊戲當中進入設定－＞隱私權與步數－＞步數，選擇使用之前的追蹤方式(Google Fit)。
+
 
 ---
 
@@ -95,3 +112,5 @@ GpsMocker/
 
 **Q: App crash on start?**
 → 確認已授予「位置」權限
+
+
