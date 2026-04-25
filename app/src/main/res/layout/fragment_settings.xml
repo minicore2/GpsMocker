@@ -144,7 +144,7 @@
                 android:orientation="vertical" android:padding="16dp">
 
                 <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-                    android:text="GPS Mocker" android:textColor="@color/accent"
+                    android:text="PikminGPSMocker" android:textColor="@color/accent"
                     android:textSize="16sp" android:textStyle="bold" android:fontFamily="monospace"/>
                 <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
                     android:text="v2.0  ·  minicore@Claude.ai"

@@ -187,6 +187,10 @@ class MapFragment : Fragment() {
         binding.btnSearch.setOnClickListener {
             triggerSearch(b?.etSearch?.text?.toString() ?: "")
         }
+
+        binding.btnRandomLandmark.setOnClickListener {
+            teleportToRandomLandmark()
+        }
         binding.etSearch.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_SEARCH) {
                 triggerSearch(b?.etSearch?.text?.toString() ?: ""); true
@@ -369,6 +373,45 @@ class MapFragment : Fragment() {
                 gps
             }
             AppPrefs.StartFrom.NONE -> null
+        }
+    }
+
+    /**
+     * Fetch a random geolocated Wikipedia landmark and teleport the map there.
+     * Shows a loading indicator while the network call is in flight.
+     */
+    private fun teleportToRandomLandmark() {
+        b?.btnRandomLandmark?.isEnabled = false
+        b?.tvCoords?.text = "🎲 正在從 Wikipedia 查詢隨機地標…"
+
+        lifecycleScope.launch {
+            val result = WikiLandmarkHelper.random()
+
+            if (!isAdded) return@launch
+            b?.btnRandomLandmark?.isEnabled = true
+
+            if (result == null) {
+                toast("🌐 無法取得地標，請檢查網路連線")
+                b?.tvCoords?.text = if (mode == Mode.FIXED)
+                    "點選地圖設定固定位置" else "點選地圖新增航點"
+                return@launch
+            }
+
+            val point = result.point
+            b?.mapView?.controller?.animateTo(point)
+            b?.mapView?.controller?.setZoom(15.0)
+
+            when (mode) {
+                Mode.FIXED -> {
+                    placeFixedMarker(point)
+                    b?.tvCoords?.text = "🎲 ${result.name}\n${result.summary.take(80)}\n${fmtCoord(point)}"
+                }
+                Mode.ROUTE -> {
+                    addWaypoint(point)
+                    b?.tvCoords?.text = "🎲 已新增：${result.name}\n${fmtCoord(point)}"
+                }
+            }
+            toast("🎲 ${result.name}")
         }
     }
 

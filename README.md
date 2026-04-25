@@ -1,4 +1,4 @@
-# GPS Mocker 📍
+# PikminGPSMocker 📍
 
 Android GPS 模擬工具，專為開發者測試位置功能設計。
 
@@ -39,7 +39,7 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 
 1. 手機進入 **設定 → 開發者選項**
 2. 找到「**選取模擬位置應用程式**」
-3. 選擇 **GPS Mocker**
+3. 選擇 **PikminGPSMocker**
 
 > ⚠️ 沒有這個步驟，Mock Location 會被系統拒絕！
 
@@ -105,7 +105,7 @@ GpsMocker/
 ## 常見問題
 
 **Q: 按開始後其他 App 的 GPS 沒變？**
-→ 確認有在開發者選項設定 GPS Mocker 為模擬位置 App
+→ 確認有在開發者選項設定 PikminGPSMocker 為模擬位置 App
 
 **Q: 地圖載不出來？**
 → 確認手機有網路連線（OSMDroid 需要下載地圖磚）

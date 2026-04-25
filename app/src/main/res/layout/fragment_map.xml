@@ -24,6 +24,17 @@
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent">
 
+        <ImageButton
+            android:id="@+id/btnRandomLandmark"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:layout_marginEnd="6dp"
+            android:src="@android:drawable/ic_menu_compass"
+            android:background="@color/surface"
+            android:tint="@color/accent"
+            android:padding="6dp"
+            android:contentDescription="隨機地標"/>
+
         <EditText
             android:id="@+id/etSearch"
             android:layout_width="0dp"

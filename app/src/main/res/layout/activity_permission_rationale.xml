@@ -27,7 +27,7 @@
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="GPS Mocker 在模擬路線移動時，會根據移動距離（每 0.4 公尺計 1 步）將步數寫入 Health Connect，讓 Google Fit、Samsung Health 等健康 App 能同步顯示正確的步數記錄。\n\n讀取步數是為了在 App 啟動時顯示今日累積步數。"
+        android:text="PikminGPSMocker 在模擬路線移動時，會根據移動距離（每 0.4 公尺計 1 步）將步數寫入 Health Connect，讓 Google Fit、Samsung Health 等健康 App 能同步顯示正確的步數記錄。\n\n讀取步數是為了在 App 啟動時顯示今日累積步數。"
         android:textColor="@color/text_primary"
         android:textSize="14sp"
         android:lineSpacingMultiplier="1.5"

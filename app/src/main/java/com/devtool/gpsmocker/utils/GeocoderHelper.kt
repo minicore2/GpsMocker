@@ -89,3 +89,143 @@ object GeocoderHelper {
         }
     }
 }
+
+// ── Wikipedia Random Landmark ─────────────────────────────────────────────────
+
+data class LandmarkResult(
+    val name:    String,
+    val summary: String,   // short Wikipedia extract
+    val point:   GeoPoint
+)
+
+/**
+ * Strategy: Wikipedia "random" API + Geosearch
+ *
+ * Step 1 – Pick N random Wikipedia page IDs in the "landmark / tourist attraction"
+ *           space by using the categorymembers API for a broad category list,
+ *           then picking one at random from the returned batch.
+ *
+ * Step 2 – For each candidate, fetch its coordinates via the Wikipedia
+ *           geo|coordinates prop API. Pages without coordinates are skipped.
+ *
+ * Step 3 – Return the first hit with valid coordinates + a short extract.
+ *
+ * This means every call can surface a completely different obscure landmark
+ * from any country on earth.
+ */
+object WikiLandmarkHelper {
+
+    private const val TAG = "WikiLandmarkHelper"
+
+    // Broad Wikipedia categories that contain geolocated landmark articles.
+    // We rotate through them randomly so results are diverse.
+    private val CATEGORIES = listOf(
+        "World_Heritage_Sites",
+        "Tourist_attractions",
+        "National_parks",
+        "Cathedrals",
+        "Castles",
+        "Ancient_cities",
+        "Waterfalls",
+        "Museums",
+        "Bridges",
+        "Volcanoes",
+        "Islands",
+        "Mountains",
+        "Archaeological_sites",
+        "Temples",
+        "Palaces",
+        "Lighthouses",
+        "Natural_monuments",
+        "Historic_districts",
+        "Botanical_gardens",
+        "Zoos",
+        "Amusement_parks",
+        "Beaches",
+        "Lakes",
+        "Caves",
+        "Glaciers",
+    )
+
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+        .readTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+        .build()
+
+    /**
+     * Return a random geolocated Wikipedia landmark.
+     * Retries up to [maxAttempts] times across different categories if a
+     * page has no coordinates.
+     */
+    suspend fun random(maxAttempts: Int = 6): LandmarkResult? =
+        withContext(kotlinx.coroutines.Dispatchers.IO) {
+            repeat(maxAttempts) { attempt ->
+                try {
+                    val category = CATEGORIES.random()
+                    // Fetch up to 50 members from this category, offset randomly
+                    val offset = (0..500).random()
+                    val membersUrl = "https://en.wikipedia.org/w/api.php" +
+                        "?action=query&list=categorymembers&cmtitle=Category:$category" +
+                        "&cmlimit=50&cmoffset=$offset&cmnamespace=0&format=json"
+
+                    val membersBody = fetch(membersUrl) ?: return@repeat
+                    val members = org.json.JSONObject(membersBody)
+                        .optJSONObject("query")
+                        ?.optJSONArray("categorymembers") ?: return@repeat
+
+                    if (members.length() == 0) return@repeat
+
+                    // Pick a random page from the batch
+                    val page = members.getJSONObject((0 until members.length()).random())
+                    val pageId = page.optInt("pageid", -1).takeIf { it > 0 } ?: return@repeat
+                    val title  = page.optString("title").takeIf { it.isNotBlank() } ?: return@repeat
+
+                    // Fetch coordinates + extract for this page
+                    val detailUrl = "https://en.wikipedia.org/w/api.php" +
+                        "?action=query&pageids=$pageId" +
+                        "&prop=coordinates|extracts&exintro=true&exsentences=2&explaintext=true" +
+                        "&format=json"
+
+                    val detailBody = fetch(detailUrl) ?: return@repeat
+                    val pageObj = org.json.JSONObject(detailBody)
+                        .optJSONObject("query")
+                        ?.optJSONObject("pages")
+                        ?.optJSONObject(pageId.toString()) ?: return@repeat
+
+                    val coordsArr = pageObj.optJSONArray("coordinates")
+                    if (coordsArr == null || coordsArr.length() == 0) return@repeat
+
+                    val coord = coordsArr.getJSONObject(0)
+                    val lat = coord.optDouble("lat", Double.NaN)
+                    val lon = coord.optDouble("lon", Double.NaN)
+                    if (lat.isNaN() || lon.isNaN()) return@repeat
+
+                    val extract = pageObj.optString("extract", "")
+                        .replace(Regex("\\s+"), " ")
+                        .take(120)
+                        .trimEnd()
+
+                    android.util.Log.d(TAG, "Found: $title [$lat, $lon] via $category (attempt $attempt)")
+                    return@withContext LandmarkResult(
+                        name    = title,
+                        summary = extract,
+                        point   = GeoPoint(lat, lon)
+                    )
+                } catch (e: Exception) {
+                    android.util.Log.w(TAG, "Attempt $attempt failed: ${e.message}")
+                }
+            }
+            null  // all attempts exhausted
+        }
+
+    private fun fetch(url: String): String? = try {
+        val req = Request.Builder()
+            .url(url)
+            .header("User-Agent", "PikminGPSMocker/2.0 Android (com.devtool.gpsmocker)")
+            .build()
+        client.newCall(req).execute().use { it.body?.string() }
+    } catch (e: Exception) {
+        android.util.Log.e(TAG, "fetch error: ${e.message}")
+        null
+    }
+}

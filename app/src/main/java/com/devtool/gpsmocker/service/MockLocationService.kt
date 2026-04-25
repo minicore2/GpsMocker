@@ -74,7 +74,7 @@ class MockLocationService : Service() {
             this, android.Manifest.permission.ACCESS_COARSE_LOCATION
         ) == android.content.pm.PackageManager.PERMISSION_GRANTED
         if (!fineOk && !coarseOk) { stopSelf(); return START_NOT_STICKY }
-        startForeground(NOTIFICATION_ID, buildNotification("GPS Mocker 待機中"))
+        startForeground(NOTIFICATION_ID, buildNotification("PikminGPSMocker 待機中"))
         return START_STICKY
     }
 
@@ -175,7 +175,7 @@ class MockLocationService : Service() {
         mockJob = null
         isRunning = false
         try { locationManager.removeTestProvider(PROVIDER) } catch (_: Exception) {}
-        updateNotification("GPS Mocker 待機中")
+        updateNotification("PikminGPSMocker 待機中")
     }
 
     // ── Helpers ───────────────────────────────────
@@ -225,7 +225,7 @@ class MockLocationService : Service() {
 
     private fun createNotificationChannel() {
         val ch = NotificationChannel(
-            CHANNEL_ID, "GPS Mocker", NotificationManager.IMPORTANCE_LOW
+            CHANNEL_ID, "PikminGPSMocker", NotificationManager.IMPORTANCE_LOW
         ).apply { description = "GPS 模擬服務通知" }
         getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
     }
@@ -235,7 +235,7 @@ class MockLocationService : Service() {
             this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("GPS Mocker")
+            .setContentTitle("PikminGPSMocker")
             .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
             .setContentIntent(pi)
