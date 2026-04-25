@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.GpsMocker" parent="Theme.Material3.Dark">
+    <!-- NoActionBar so we don't show "GPS Mocker" title -->
+    <style name="Theme.GpsMocker" parent="Theme.Material3.Dark.NoActionBar">
         <item name="colorPrimary">@color/accent</item>
         <item name="colorPrimaryVariant">@color/accent_dark</item>
         <item name="colorOnPrimary">@color/bg_dark</item>
@@ -8,6 +9,7 @@
         <item name="colorOnSurface">@color/text_primary</item>
         <item name="android:statusBarColor">@color/surface</item>
         <item name="android:windowBackground">@color/bg_dark</item>
+        <item name="android:navigationBarColor">@color/surface</item>
     </style>
 
     <style name="AlertDialogDark" parent="ThemeOverlay.Material3.MaterialAlertDialog">

@@ -13,15 +13,9 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
-
-    <!-- Health Connect permissions
-         Android 13: granted by standalone HC app
-         Android 14: granted by system-built-in HC -->
     <uses-permission android:name="android.permission.health.READ_STEPS" />
     <uses-permission android:name="android.permission.health.WRITE_STEPS" />
 
-    <!-- Required on Android 14+ so PackageManager can resolve the
-         Health Connect provider and getSdkStatus() works correctly -->
     <queries>
         <package android:name="com.google.android.apps.healthdata" />
         <intent>
@@ -41,14 +35,15 @@
         <activity
             android:name=".ui.MainActivity"
             android:exported="true"
-            android:screenOrientation="portrait">
+            android:screenOrientation="portrait"
+            android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
 
-        <!-- Health Connect rationale screen (required by HC policy) -->
+        <!-- Health Connect rationale (required by HC policy) -->
         <activity
             android:name=".ui.PermissionRationaleActivity"
             android:exported="true">
@@ -56,11 +51,6 @@
                 <action android:name="androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE" />
             </intent-filter>
         </activity>
-
-        <activity
-            android:name=".ui.AboutActivity"
-            android:exported="false"
-            android:parentActivityName=".ui.MainActivity" />
 
         <service
             android:name=".service.MockLocationService"

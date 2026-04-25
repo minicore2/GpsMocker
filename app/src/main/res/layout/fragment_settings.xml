@@ -1,0 +1,156 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg_dark">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <!-- Speed card -->
+        <androidx.cardview.widget.CardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp"
+            app:cardBackgroundColor="@color/surface"
+            app:cardCornerRadius="12dp">
+
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="vertical" android:padding="16dp">
+
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:text="⚡ 移動速度" android:textColor="#888"
+                    android:textSize="11sp" android:textAllCaps="true" android:letterSpacing="0.1"/>
+
+                <TextView android:id="@+id/tvSpeedValue"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:text="1.5 m/s  🚶 步行" android:textColor="@color/text_primary"
+                    android:textSize="18sp" android:fontFamily="monospace"
+                    android:layout_marginTop="8dp"/>
+
+                <SeekBar android:id="@+id/seekSpeed"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:progress="13" android:max="100"
+                    android:thumbTint="@color/accent" android:progressTint="@color/accent"/>
+            </LinearLayout>
+        </androidx.cardview.widget.CardView>
+
+        <!-- Start position card -->
+        <androidx.cardview.widget.CardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp"
+            app:cardBackgroundColor="@color/surface"
+            app:cardCornerRadius="12dp">
+
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="vertical" android:padding="16dp">
+
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:text="🚩 路線起始位置" android:textColor="#888"
+                    android:textSize="11sp" android:textAllCaps="true" android:letterSpacing="0.1"/>
+
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:text="設定路線模擬開始時的起點來源"
+                    android:textColor="@color/text_secondary" android:textSize="12sp"
+                    android:layout_marginTop="4dp" android:layout_marginBottom="8dp"/>
+
+                <RadioGroup android:id="@+id/rgStartFrom"
+                    android:layout_width="match_parent" android:layout_height="wrap_content">
+
+                    <RadioButton android:id="@+id/rbStartNone"
+                        android:layout_width="match_parent" android:layout_height="wrap_content"
+                        android:text="使用地圖上設定的第一個航點"
+                        android:textColor="@color/text_primary" android:textSize="14sp"
+                        android:buttonTint="@color/accent" android:checked="true"/>
+
+                    <RadioButton android:id="@+id/rbStartLast"
+                        android:layout_width="match_parent" android:layout_height="wrap_content"
+                        android:text="從上次模擬結束的位置出發"
+                        android:textColor="@color/text_primary" android:textSize="14sp"
+                        android:buttonTint="@color/accent" android:layout_marginTop="4dp"/>
+
+                    <RadioButton android:id="@+id/rbStartGPS"
+                        android:layout_width="match_parent" android:layout_height="wrap_content"
+                        android:text="從裝置目前 GPS 位置出發"
+                        android:textColor="@color/text_primary" android:textSize="14sp"
+                        android:buttonTint="@color/accent" android:layout_marginTop="4dp"/>
+                </RadioGroup>
+
+                <TextView android:id="@+id/tvLastPosition"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:text="（尚無上次位置記錄）"
+                    android:textColor="@color/text_secondary" android:textSize="11sp"
+                    android:fontFamily="monospace" android:layout_marginTop="6dp"/>
+            </LinearLayout>
+        </androidx.cardview.widget.CardView>
+
+        <!-- Step backend card -->
+        <androidx.cardview.widget.CardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp"
+            app:cardBackgroundColor="@color/surface"
+            app:cardCornerRadius="12dp">
+
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="vertical" android:padding="16dp">
+
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:text="👟 步數來源" android:textColor="#888"
+                    android:textSize="11sp" android:textAllCaps="true" android:letterSpacing="0.1"/>
+
+                <RadioGroup android:id="@+id/rgStepBackend"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp">
+
+                    <RadioButton android:id="@+id/rbStepHC"
+                        android:layout_width="match_parent" android:layout_height="wrap_content"
+                        android:text="❤️ Health Connect（同步健康 App）"
+                        android:textColor="@color/text_primary" android:textSize="14sp"
+                        android:buttonTint="@color/accent" android:checked="true"/>
+
+                    <RadioButton android:id="@+id/rbStepLocal"
+                        android:layout_width="match_parent" android:layout_height="wrap_content"
+                        android:text="💾 本地計步（無需授權）"
+                        android:textColor="@color/text_primary" android:textSize="14sp"
+                        android:buttonTint="@color/accent" android:layout_marginTop="4dp"/>
+                </RadioGroup>
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnConnectHC"
+                    android:layout_width="match_parent"
+                    android:layout_height="36dp"
+                    android:layout_marginTop="8dp"
+                    android:text="授權 Health Connect"
+                    android:backgroundTint="@color/accent"
+                    android:textColor="@color/bg_dark"/>
+            </LinearLayout>
+        </androidx.cardview.widget.CardView>
+
+        <!-- About card -->
+        <androidx.cardview.widget.CardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            app:cardBackgroundColor="@color/surface"
+            app:cardCornerRadius="12dp">
+
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="vertical" android:padding="16dp">
+
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:text="GPS Mocker" android:textColor="@color/accent"
+                    android:textSize="16sp" android:textStyle="bold" android:fontFamily="monospace"/>
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:text="v2.0  ·  minicore@Claude.ai"
+                    android:textColor="@color/text_secondary" android:textSize="12sp"
+                    android:fontFamily="monospace" android:layout_marginTop="4dp"/>
+            </LinearLayout>
+        </androidx.cardview.widget.CardView>
+    </LinearLayout>
+</ScrollView>

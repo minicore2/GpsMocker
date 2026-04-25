@@ -16,7 +16,6 @@ object StepManager {
 
     var activeBackend: Backend = Backend.LOCAL
         private set
-
     var backendLabel: String = "本地計步 💾"
         private set
 
@@ -37,15 +36,15 @@ object StepManager {
     // ── Init ──────────────────────────────────────
 
     suspend fun init(context: Context): Backend = withContext(Dispatchers.IO) {
-        val preferred = getPreferredBackend(context)
+        val pref = getPreferredBackend(context)
         activeBackend = when {
-            preferred == Backend.HEALTH_CONNECT &&
+            pref == Backend.HEALTH_CONNECT &&
             HealthConnectHelper.isAvailable(context) &&
             HealthConnectHelper.hasPermissions(context) -> {
                 backendLabel = "Health Connect ❤️"
                 Backend.HEALTH_CONNECT
             }
-            preferred == Backend.HEALTH_CONNECT &&
+            pref == Backend.HEALTH_CONNECT &&
             HealthConnectHelper.isAvailable(context) -> {
                 backendLabel = "本地計步 💾（HC 待授權）"
                 Backend.LOCAL
@@ -55,7 +54,7 @@ object StepManager {
                 Backend.LOCAL
             }
         }
-        Log.d(TAG, "Active backend: $activeBackend ($backendLabel)")
+        Log.d(TAG, "Active: $activeBackend ($backendLabel)")
         activeBackend
     }
 
@@ -66,7 +65,6 @@ object StepManager {
             Backend.HEALTH_CONNECT -> {
                 val s = HealthConnectHelper.readTodaySteps(context)
                 if (s < 0) {
-                    Log.w(TAG, "HC read failed → downgrade to local")
                     activeBackend = Backend.LOCAL
                     backendLabel  = "本地計步 💾（HC 失敗）"
                     LocalStepStore.getTodaySteps(context)
@@ -78,27 +76,21 @@ object StepManager {
 
     // ── Write ─────────────────────────────────────
 
-    /**
-     * Record [delta] steps that occurred between [startTime] and [endTime].
-     * Passing real timestamps ensures Google Fit shows the steps in the correct
-     * time bucket and doesn't silently discard them as "unknown source".
-     */
     suspend fun addSteps(
         context: Context,
         delta: Int,
         startTime: Instant = Instant.now().minusSeconds(delta.toLong().coerceAtLeast(1)),
-        endTime: Instant   = Instant.now()
+        endTime:   Instant = Instant.now()
     ): Long = withContext(Dispatchers.IO) {
         if (delta <= 0) return@withContext LocalStepStore.getTodaySteps(context)
 
-        // Always write locally first (instant, never fails)
+        // Always persist locally first
         val localTotal = LocalStepStore.addSteps(context, delta)
 
-        // Write to Health Connect with proper time range + Device info
+        // Best-effort write to HC with real device info
         if (activeBackend == Backend.HEALTH_CONNECT) {
             val ok = HealthConnectHelper.writeSteps(context, delta, startTime, endTime)
             if (!ok) {
-                Log.w(TAG, "HC write failed → downgrade to local")
                 activeBackend = Backend.LOCAL
                 backendLabel  = "本地計步 💾（HC 寫入失敗）"
             }

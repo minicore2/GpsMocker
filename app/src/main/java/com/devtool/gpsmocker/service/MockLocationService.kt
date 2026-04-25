@@ -25,8 +25,6 @@ class MockLocationService : Service() {
         const val NOTIFICATION_ID = 1001
         const val PROVIDER        = LocationManager.GPS_PROVIDER
         const val INTERVAL_MS     = 250L
-
-        // 1 step = 0.4 m
         const val METRES_PER_STEP = 0.4
     }
 
@@ -34,10 +32,15 @@ class MockLocationService : Service() {
         fun getService(): MockLocationService = this@MockLocationService
     }
 
-    private val binder       = LocalBinder()
+    private val binder = LocalBinder()
     private lateinit var locationManager: LocationManager
     private var mockJob: Job? = null
-    private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+
+    // Use Default dispatcher for the coroutine work — UI callbacks are
+    // dispatched via Handler/runOnUiThread by the caller, not here.
+    // This avoids blocking the main thread and prevents ConcurrentModification
+    // on map overlays when the first tick fires synchronously on the main thread.
+    private val serviceScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
     var isRunning = false
         private set
@@ -49,9 +52,9 @@ class MockLocationService : Service() {
     var sessionSteps = 0
         private set
 
-    // Callback: pt, segIdx, totalSegs, newSteps, stepStartTime, stepEndTime
+    // Callbacks — set by MapFragment, cleared on stop
     var onLocationUpdate: ((GeoPoint, Int, Int, Int, Instant, Instant) -> Unit)? = null
-    var onRouteFinished:  (() -> Unit)?                                           = null
+    var onRouteFinished:  (() -> Unit)? = null
 
     // ── Lifecycle ─────────────────────────────────
 
@@ -64,14 +67,13 @@ class MockLocationService : Service() {
     override fun onBind(intent: Intent): IBinder = binder
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val hasLocation = androidx.core.content.ContextCompat.checkSelfPermission(
+        val fineOk = androidx.core.content.ContextCompat.checkSelfPermission(
             this, android.Manifest.permission.ACCESS_FINE_LOCATION
-        ) == android.content.pm.PackageManager.PERMISSION_GRANTED ||
-        androidx.core.content.ContextCompat.checkSelfPermission(
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        val coarseOk = androidx.core.content.ContextCompat.checkSelfPermission(
             this, android.Manifest.permission.ACCESS_COARSE_LOCATION
         ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-
-        if (!hasLocation) { stopSelf(); return START_NOT_STICKY }
+        if (!fineOk && !coarseOk) { stopSelf(); return START_NOT_STICKY }
         startForeground(NOTIFICATION_ID, buildNotification("GPS Mocker 待機中"))
         return START_STICKY
     }
@@ -81,9 +83,9 @@ class MockLocationService : Service() {
     fun startFixedPoint(point: GeoPoint) {
         stopMocking()
         setupTestProvider()
-        isRunning       = true
+        isRunning = true
         currentLocation = point
-        sessionSteps    = 0
+        sessionSteps = 0
         stepAccumulator = 0.0
         mockJob = serviceScope.launch {
             while (isActive) {
@@ -96,19 +98,25 @@ class MockLocationService : Service() {
 
     // ── Mode 2: Multi-waypoint route ──────────────
 
-    fun startRoute(waypoints: List<GeoPoint>, looping: Boolean = false) {
+    fun startRoute(
+        waypoints: List<GeoPoint>,
+        looping: Boolean = false,
+        overrideStart: GeoPoint? = null
+    ) {
         if (waypoints.size < 2) return
+        val pts = if (overrideStart != null) listOf(overrideStart) + waypoints.drop(1)
+                  else waypoints
         stopMocking()
         setupTestProvider()
-        isRunning       = true
-        sessionSteps    = 0
+        isRunning = true
+        sessionSteps = 0
         stepAccumulator = 0.0
 
         mockJob = serviceScope.launch {
             do {
-                for (segIdx in 0 until waypoints.size - 1) {
-                    val segStart   = waypoints[segIdx]
-                    val segEnd     = waypoints[segIdx + 1]
+                for (segIdx in 0 until pts.size - 1) {
+                    val segStart   = pts[segIdx]
+                    val segEnd     = pts[segIdx + 1]
                     val segDist    = haversineMeters(segStart, segEnd)
                     val stepM      = speedMps * (INTERVAL_MS / 1000.0)
                     val totalTicks = max(1, (segDist / stepM).toInt())
@@ -117,37 +125,35 @@ class MockLocationService : Service() {
                         if (!isActive) return@launch
 
                         val tickStart = Instant.now()
+                        val frac = if (totalTicks == 0) 1.0
+                                   else tick.toDouble() / totalTicks
+                        val lat = segStart.latitude  + (segEnd.latitude  - segStart.latitude)  * frac
+                        val lon = segStart.longitude + (segEnd.longitude - segStart.longitude) * frac
+                        val pt  = GeoPoint(lat, lon)
 
-                        val frac = if (totalTicks == 0) 1.0 else tick.toDouble() / totalTicks
-                        val lat  = segStart.latitude  + (segEnd.latitude  - segStart.latitude)  * frac
-                        val lon  = segStart.longitude + (segEnd.longitude - segStart.longitude) * frac
-                        val pt   = GeoPoint(lat, lon)
-
-                        // Accumulate steps with fractional precision
                         stepAccumulator += stepM / METRES_PER_STEP
                         val newSteps     = stepAccumulator.toInt()
                         stepAccumulator -= newSteps
                         sessionSteps    += newSteps
+                        currentLocation  = pt
 
-                        currentLocation = pt
                         injectLocation(lat, lon, speedMps.toFloat())
-
                         delay(INTERVAL_MS)
 
                         val tickEnd = Instant.now()
-
-                        // Pass real tick timestamps so HC/Google Fit gets correct time range
-                        onLocationUpdate?.invoke(pt, segIdx, waypoints.size - 1,
-                                                 newSteps, tickStart, tickEnd)
+                        // Invoke on the calling side — caller decides which thread to dispatch to
+                        onLocationUpdate?.invoke(pt, segIdx, pts.size - 1, newSteps, tickStart, tickEnd)
                     }
                 }
 
                 if (!looping) {
-                    val last = waypoints.last()
+                    val last = pts.last()
                     currentLocation = last
-                    onLocationUpdate?.invoke(last, waypoints.size - 2, waypoints.size - 1,
-                                             0, Instant.now(), Instant.now())
+                    onLocationUpdate?.invoke(
+                        last, pts.size - 2, pts.size - 1, 0, Instant.now(), Instant.now()
+                    )
                     onRouteFinished?.invoke()
+                    // Hold position at destination
                     while (isActive) {
                         injectLocation(last.latitude, last.longitude, 0f)
                         delay(INTERVAL_MS)
@@ -156,8 +162,8 @@ class MockLocationService : Service() {
             } while (isActive && looping)
         }
 
-        val totalDist = (0 until waypoints.size - 1)
-            .sumOf { haversineMeters(waypoints[it], waypoints[it + 1]) }
+        val totalDist = (0 until pts.size - 1)
+            .sumOf { haversineMeters(pts[it], pts[it + 1]) }
         val etaSec = (totalDist / speedMps).toInt()
         updateNotification("🚶 路線模擬 ${"%.1f".format(speedMps)} m/s｜預計 ${etaSec}s")
     }
@@ -166,7 +172,7 @@ class MockLocationService : Service() {
 
     fun stopMocking() {
         mockJob?.cancel()
-        mockJob   = null
+        mockJob = null
         isRunning = false
         try { locationManager.removeTestProvider(PROVIDER) } catch (_: Exception) {}
         updateNotification("GPS Mocker 待機中")
@@ -176,13 +182,17 @@ class MockLocationService : Service() {
 
     private fun setupTestProvider() {
         try { locationManager.removeTestProvider(PROVIDER) } catch (_: Exception) {}
-        locationManager.addTestProvider(
-            PROVIDER,
-            false, false, false, false, true, true, true,
-            android.location.provider.ProviderProperties.POWER_USAGE_LOW,
-            android.location.provider.ProviderProperties.ACCURACY_FINE
-        )
-        locationManager.setTestProviderEnabled(PROVIDER, true)
+        try {
+            locationManager.addTestProvider(
+                PROVIDER,
+                false, false, false, false, true, true, true,
+                android.location.provider.ProviderProperties.POWER_USAGE_LOW,
+                android.location.provider.ProviderProperties.ACCURACY_FINE
+            )
+            locationManager.setTestProviderEnabled(PROVIDER, true)
+        } catch (e: Exception) {
+            android.util.Log.e("MockLocationService", "setupTestProvider failed: ${e.message}", e)
+        }
     }
 
     private fun injectLocation(lat: Double, lon: Double, speed: Float) {
@@ -203,7 +213,8 @@ class MockLocationService : Service() {
 
     fun haversineMeters(a: GeoPoint, b: GeoPoint): Double {
         val r    = 6371000.0
-        val lat1 = Math.toRadians(a.latitude);  val lat2 = Math.toRadians(b.latitude)
+        val lat1 = Math.toRadians(a.latitude)
+        val lat2 = Math.toRadians(b.latitude)
         val dLat = Math.toRadians(b.latitude  - a.latitude)
         val dLon = Math.toRadians(b.longitude - a.longitude)
         val h    = sin(dLat / 2).pow(2) + cos(lat1) * cos(lat2) * sin(dLon / 2).pow(2)
@@ -213,8 +224,9 @@ class MockLocationService : Service() {
     // ── Notification ──────────────────────────────
 
     private fun createNotificationChannel() {
-        val ch = NotificationChannel(CHANNEL_ID, "GPS Mocker", NotificationManager.IMPORTANCE_LOW)
-            .apply { description = "GPS 模擬服務通知" }
+        val ch = NotificationChannel(
+            CHANNEL_ID, "GPS Mocker", NotificationManager.IMPORTANCE_LOW
+        ).apply { description = "GPS 模擬服務通知" }
         getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
     }
 
