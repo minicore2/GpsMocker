@@ -9,12 +9,15 @@ import androidx.lifecycle.lifecycleScope
 import com.devtool.gpsmocker.databinding.FragmentSettingsBinding
 import com.devtool.gpsmocker.ui.SharedViewModel
 import com.devtool.gpsmocker.utils.*
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.*
 
 class SettingsFragment : Fragment() {
+
     private var _b: FragmentSettingsBinding? = null
     private val b get() = _b
     private val vm by lazy { SharedViewModel.get(requireActivity()) }
+
+    private var fetchJob: Job? = null
 
     private val hcPermLauncher = registerForActivityResult(
         PermissionController.createRequestPermissionResultContract()
@@ -31,46 +34,47 @@ class SettingsFragment : Fragment() {
     }
 
     override fun onCreateView(i: LayoutInflater, c: ViewGroup?, s: Bundle?): View {
-        _b = FragmentSettingsBinding.inflate(i, c, false); return _b!!.root
+        _b = FragmentSettingsBinding.inflate(i, c, false)
+        return _b!!.root
     }
 
     override fun onViewCreated(v: View, s: Bundle?) {
         super.onViewCreated(v, s)
         loadSettings()
         setupListeners()
+        refreshDbStats()
     }
+
+    // ── Settings load ─────────────────────────────
 
     private fun loadSettings() {
         val binding = _b ?: return
         val ctx = context ?: return
 
-        // Speed
         val speed = AppPrefs.loadSpeed(ctx)
         updateSpeedLabel(speed)
         binding.seekSpeed.progress = speedToSlider(speed)
 
-        // Start-from radio
         when (AppPrefs.loadStartFrom(ctx)) {
             AppPrefs.StartFrom.NONE          -> binding.rgStartFrom.check(binding.rbStartNone.id)
             AppPrefs.StartFrom.LAST_POSITION -> binding.rgStartFrom.check(binding.rbStartLast.id)
             AppPrefs.StartFrom.DEVICE_GPS    -> binding.rgStartFrom.check(binding.rbStartGPS.id)
         }
 
-        // Last position display
         val lp = LastPositionStore.load(ctx)
         binding.tvLastPosition.text = lp?.let {
             "上次位置：${"%.6f".format(it.latitude)}, ${"%.6f".format(it.longitude)}"
         } ?: "（尚無上次位置記錄）"
 
-        // Step backend radio
         val preferHC = AppPrefs.loadStepBackend(ctx)
         binding.rgStepBackend.check(if (preferHC) binding.rbStepHC.id else binding.rbStepLocal.id)
     }
 
+    // ── Listeners ─────────────────────────────────
+
     private fun setupListeners() {
         val binding = _b ?: return
 
-        // Speed slider
         binding.seekSpeed.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(sb: SeekBar, p: Int, u: Boolean) {
                 val ctx = context ?: return
@@ -79,10 +83,9 @@ class SettingsFragment : Fragment() {
                 AppPrefs.saveSpeed(ctx, spd)
             }
             override fun onStartTrackingTouch(sb: SeekBar) {}
-            override fun onStopTrackingTouch(sb: SeekBar)  {}
+            override fun onStopTrackingTouch(sb: SeekBar) {}
         })
 
-        // Start-from
         binding.rgStartFrom.setOnCheckedChangeListener { _, id ->
             val ctx = context ?: return@setOnCheckedChangeListener
             val sf = when (id) {
@@ -93,7 +96,6 @@ class SettingsFragment : Fragment() {
             AppPrefs.saveStartFrom(ctx, sf)
         }
 
-        // Step backend
         binding.rgStepBackend.setOnCheckedChangeListener { _, id ->
             val ctx = context ?: return@setOnCheckedChangeListener
             val useHc = id == binding.rbStepHC.id
@@ -101,13 +103,11 @@ class SettingsFragment : Fragment() {
             vm.setPreferHC(ctx, useHc)
         }
 
-        // HC connect button
         binding.btnConnectHC.setOnClickListener {
             lifecycleScope.launch {
                 val ctx = context ?: return@launch
                 if (!HealthConnectHelper.isAvailable(ctx)) {
-                    toast("此裝置不支援 Health Connect")
-                    return@launch
+                    toast("此裝置不支援 Health Connect"); return@launch
                 }
                 if (HealthConnectHelper.hasPermissions(ctx)) {
                     vm.refreshSteps(); toast("Health Connect 已授權")
@@ -116,7 +116,83 @@ class SettingsFragment : Fragment() {
                 }
             }
         }
+
+        // ── Landmark DB fetch ──────────────────────
+        binding.btnFetchLandmarks.setOnClickListener { startFetch() }
+        binding.btnStopFetch.setOnClickListener     { stopFetch() }
     }
+
+    // ── Landmark DB fetch ─────────────────────────
+
+    private fun startFetch() {
+        val ctx = context ?: return
+        setFetchUI(running = true)
+        _b?.tvFetchProgress?.text = "準備抓取…"
+
+        WikiFetcher.onProgress = { continent, fetched, target, msg ->
+            activity?.runOnUiThread {
+                val binding = _b ?: return@runOnUiThread
+                binding.tvFetchProgress?.text = msg
+                val pct = if (target > 0) (fetched * 100 / target).coerceIn(0, 100) else 0
+                binding.progressFetch?.progress = pct
+                if (continent == "完成") {
+                    setFetchUI(running = false)
+                    refreshDbStats()
+                    WikiFetcher.onProgress = null
+                }
+            }
+        }
+
+        fetchJob = lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                WikiFetcher.fetchAll(ctx)
+            } catch (e: CancellationException) {
+                // user stopped
+            } catch (e: Exception) {
+                activity?.runOnUiThread {
+                    toast("抓取失敗：${e.message}")
+                    setFetchUI(running = false)
+                }
+            }
+        }
+    }
+
+    private fun stopFetch() {
+        fetchJob?.cancel()
+        fetchJob = null
+        WikiFetcher.onProgress = null
+        setFetchUI(running = false)
+        _b?.tvFetchProgress?.text = "已停止"
+        refreshDbStats()
+    }
+
+    private fun setFetchUI(running: Boolean) {
+        val binding = _b ?: return
+        binding.btnFetchLandmarks?.isEnabled = !running
+        binding.btnStopFetch?.visibility =
+            if (running) android.view.View.VISIBLE else android.view.View.GONE
+        binding.progressFetch?.visibility =
+            if (running) android.view.View.VISIBLE else android.view.View.GONE
+        binding.tvFetchProgress?.visibility =
+            if (running) android.view.View.VISIBLE else android.view.View.GONE
+    }
+
+    private fun refreshDbStats() {
+        val ctx = context ?: return
+        lifecycleScope.launch {
+            val count = WikiLandmarkHelper.dbCount(ctx)
+            val stats = WikiLandmarkHelper.dbStats(ctx)
+            val binding = _b ?: return@launch
+            if (count == 0) {
+                binding.tvLandmarkDbStats?.text = "資料庫：空（點下方按鈕從 Wikipedia 抓取）"
+            } else {
+                val detail = stats.joinToString("  ") { "${it.continent}:${it.cnt}" }
+                binding.tvLandmarkDbStats?.text = "資料庫：共 $count 個地點\n$detail"
+            }
+        }
+    }
+
+    // ── Helpers ───────────────────────────────────
 
     private fun updateSpeedLabel(mps: Double) {
         val tag = when {
@@ -131,8 +207,17 @@ class SettingsFragment : Fragment() {
     }
 
     private fun sliderToSpeed(p: Int): Double = 0.5 * Math.pow(40.0, p / 100.0)
-    private fun speedToSlider(spd: Double): Int = (Math.log(spd / 0.5) / Math.log(40.0) * 100).toInt().coerceIn(0, 100)
-    private fun toast(m: String) = Toast.makeText(requireContext(), m, Toast.LENGTH_SHORT).show()
+    private fun speedToSlider(spd: Double): Int =
+        (Math.log(spd / 0.5) / Math.log(40.0) * 100).toInt().coerceIn(0, 100)
 
-    override fun onDestroyView() { _b = null; super.onDestroyView() }
+    private fun toast(m: String) {
+        val ctx = context ?: return
+        Toast.makeText(ctx, m, Toast.LENGTH_SHORT).show()
+    }
+
+    override fun onDestroyView() {
+        WikiFetcher.onProgress = null
+        _b = null
+        super.onDestroyView()
+    }
 }

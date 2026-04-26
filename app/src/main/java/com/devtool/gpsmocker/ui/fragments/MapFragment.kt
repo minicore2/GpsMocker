@@ -385,7 +385,8 @@ class MapFragment : Fragment() {
         b?.tvCoords?.text = "🎲 正在從 Wikipedia 查詢隨機地標…"
 
         lifecycleScope.launch {
-            val result = WikiLandmarkHelper.random()
+            val ctx = context ?: return@launch
+            val result = WikiLandmarkHelper.random(ctx)
 
             if (!isAdded) return@launch
             b?.btnRandomLandmark?.isEnabled = true

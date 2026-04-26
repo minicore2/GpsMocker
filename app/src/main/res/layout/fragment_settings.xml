@@ -133,6 +133,79 @@
             </LinearLayout>
         </androidx.cardview.widget.CardView>
 
+        <!-- Landmark database card -->
+        <androidx.cardview.widget.CardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp"
+            app:cardBackgroundColor="@color/surface"
+            app:cardCornerRadius="12dp">
+
+            <LinearLayout android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" android:padding="16dp">
+
+                <TextView android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="🗺️ 地標資料庫"
+                    android:textColor="#888" android:textSize="11sp"
+                    android:textAllCaps="true" android:letterSpacing="0.1"/>
+
+                <TextView android:id="@+id/tvLandmarkDbStats"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="資料庫：讀取中…"
+                    android:textColor="@color/text_primary"
+                    android:textSize="13sp"
+                    android:fontFamily="monospace"
+                    android:layout_marginTop="8dp"
+                    android:layout_marginBottom="4dp"/>
+
+                <TextView android:id="@+id/tvFetchProgress"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text=""
+                    android:textColor="@color/accent"
+                    android:textSize="12sp"
+                    android:fontFamily="monospace"
+                    android:visibility="gone"/>
+
+                <ProgressBar
+                    android:id="@+id/progressFetch"
+                    style="?android:attr/progressBarStyleHorizontal"
+                    android:layout_width="match_parent"
+                    android:layout_height="8dp"
+                    android:layout_marginTop="6dp"
+                    android:layout_marginBottom="6dp"
+                    android:max="100"
+                    android:progress="0"
+                    android:progressTint="@color/accent"
+                    android:visibility="gone"/>
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnFetchLandmarks"
+                    android:layout_width="match_parent"
+                    android:layout_height="36dp"
+                    android:layout_marginTop="8dp"
+                    android:text="🌐 從 Wikipedia 更新地標庫"
+                    android:backgroundTint="@color/accent"
+                    android:textColor="@color/bg_dark"
+                    android:textSize="13sp"/>
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnStopFetch"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="36dp"
+                    android:layout_marginTop="6dp"
+                    android:text="⏹ 停止抓取"
+                    android:strokeColor="@color/error"
+                    android:textColor="@color/error"
+                    android:visibility="gone"/>
+
+            </LinearLayout>
+        </androidx.cardview.widget.CardView>
+
         <!-- About card -->
         <androidx.cardview.widget.CardView
             android:layout_width="match_parent"
