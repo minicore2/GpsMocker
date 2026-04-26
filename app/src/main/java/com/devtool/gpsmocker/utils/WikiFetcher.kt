@@ -9,51 +9,23 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.coroutineContext
 
-/**
- * Fetches Wikipedia geolocated articles for 4 categories × 7 continents.
- * Target: ≥ 500 points per continent, stored in Room DB.
- *
- * Wikipedia API strategy:
- *  - geosearch API: returns articles near a coordinate grid, with coordinates embedded.
- *    We scatter seed points across each continent's bounding box and geosearch radius 10000m.
- *  - This is far more reliable than categorymembers because every result HAS coordinates.
- *
- * Categories (mapped to Wikipedia geosearch "namespace=0" with keyword filter):
- *   landmark / heritage / culture / scenery
- */
 object WikiFetcher {
 
     private const val TAG = "WikiFetcher"
     private const val TARGET_PER_CONTINENT = 500
 
-    // Progress callback: (continent, fetched, total_target, message)
+    // Progress callback — always invoked on the coroutine thread;
+    // SettingsFragment posts to main thread itself.
     var onProgress: ((String, Int, Int, String) -> Unit)? = null
 
+    // Single OkHttpClient reused across all requests
     private val client = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
+        .connectTimeout(20, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
+        .callTimeout(25, TimeUnit.SECONDS)
         .build()
-
-    // Continent seed grids: bounding boxes divided into sample points
-    // Each entry: (continent, lat_min, lat_max, lon_min, lon_max)
-    private val CONTINENTS = listOf(
-        ContDef("亞洲",    "Asia",      5.0,  55.0,  26.0, 150.0),
-        ContDef("歐洲",    "Europe",   36.0,  71.0, -11.0,  40.0),
-        ContDef("非洲",    "Africa",  -35.0,  37.0, -18.0,  51.0),
-        ContDef("北美洲",  "Americas", 15.0,  72.0,-169.0, -52.0),
-        ContDef("南美洲",  "Americas",-56.0,  13.0, -82.0, -34.0),
-        ContDef("大洋洲",  "Oceania", -47.0,  -0.5, 110.0, 179.0),
-        ContDef("中東",    "Asia",     12.0,  42.0,  34.0,  63.0),
-    )
-
-    // Category keywords used to filter geosearch results by type
-    private val CATEGORY_KEYWORDS = mapOf(
-        "landmark"  to listOf("tower","monument","statue","bridge","gate","square","landmark","temple","church","mosque","cathedral","castle","palace","fort","ruins","arch"),
-        "heritage"  to listOf("heritage","UNESCO","historic","ancient","archaeological","conservation","preserved","colonial","old town"),
-        "culture"   to listOf("museum","gallery","theatre","theater","art","culture","library","university","opera"),
-        "scenery"   to listOf("park","nature","lake","river","waterfall","mountain","beach","island","canyon","glacier","forest","reserve","bay","volcano")
-    )
 
     private data class ContDef(
         val displayName: String,
@@ -62,44 +34,83 @@ object WikiFetcher {
         val lonMin: Double, val lonMax: Double
     )
 
-    suspend fun fetchAll(context: Context) {
+    private val CONTINENTS = listOf(
+        ContDef("亞洲",   "Asia",      5.0,  55.0,  26.0, 150.0),
+        ContDef("歐洲",   "Europe",   36.0,  71.0, -11.0,  40.0),
+        ContDef("非洲",   "Africa",  -35.0,  37.0, -18.0,  51.0),
+        ContDef("北美洲", "Americas", 15.0,  72.0,-169.0, -52.0),
+        ContDef("南美洲", "Americas",-56.0,  13.0, -82.0, -34.0),
+        ContDef("大洋洲", "Oceania", -47.0,  -0.5, 110.0, 179.0),
+        ContDef("中東",   "Asia",     12.0,  42.0,  34.0,  63.0),
+    )
+
+    private val CATEGORY_KEYWORDS = mapOf(
+        "landmark" to listOf("tower","monument","statue","bridge","gate","square",
+                             "temple","church","mosque","cathedral","castle","palace",
+                             "fort","ruins","arch","shrine","pagoda","lighthouse"),
+        "heritage" to listOf("heritage","UNESCO","historic","ancient","archaeological",
+                             "conservation","preserved","colonial","old town","world heritage"),
+        "culture"  to listOf("museum","gallery","theatre","theater","art","culture",
+                             "library","university","opera","concert"),
+        "scenery"  to listOf("park","nature","lake","river","waterfall","mountain","beach",
+                             "island","canyon","glacier","forest","reserve","bay","volcano",
+                             "gorge","valley","cave","hot spring","garden","falls","reef")
+    )
+
+    // ── Public entry point ────────────────────────────────────────────────────
+
+    /**
+     * Must be called from a non-main coroutine (e.g. Dispatchers.IO).
+     * Clears the DB, then fetches all continents sequentially.
+     */
+    suspend fun fetchAll(context: Context) = withContext(Dispatchers.IO) {
         val dao = LandmarkDatabase.get(context).landmarkDao()
         dao.deleteAll()
 
-        CONTINENTS.forEach { cont ->
+        for (cont in CONTINENTS) {
+            coroutineContext.ensureActive()   // stop immediately if job was cancelled
             fetchForContinent(dao, cont)
         }
+
         val total = dao.count()
         onProgress?.invoke("完成", total, total, "✅ 地標庫更新完成，共 $total 個地點")
     }
+
+    // ── Per-continent fetch ────────────────────────────────────────────────────
 
     private suspend fun fetchForContinent(
         dao: com.devtool.gpsmocker.db.LandmarkDao,
         cont: ContDef
     ) {
-        val inserted = mutableSetOf<String>() // "lat,lon" dedup key
-        var fetched = 0
+        val inserted = mutableSetOf<String>()
+        var fetched  = 0
 
-        // Generate a grid of seed points across this continent's bounding box
-        val seeds = generateSeeds(cont.latMin, cont.latMax, cont.lonMin, cont.lonMax, 80)
+        // Wikipedia geosearch radius is capped at 10 000 m.
+        // Use many small seeds (radius 8 km each) spread across the bounding box.
+        val seeds = generateSeeds(cont.latMin, cont.latMax, cont.lonMin, cont.lonMax, count = 120)
         seeds.shuffle()
 
+        onProgress?.invoke(cont.displayName, 0, TARGET_PER_CONTINENT,
+            "${cont.displayName}：開始抓取…")
+
         for (seed in seeds) {
+            coroutineContext.ensureActive()
             if (fetched >= TARGET_PER_CONTINENT) break
 
             try {
-                val batch = geosearch(seed.first, seed.second, radiusKm = 80)
+                // radius 8000 m stays safely within the 10 000 m limit
+                val batch = geosearch(seed.first, seed.second, radiusM = 8_000)
+
                 val entities = batch.mapNotNull { item ->
-                    val key = "${"%.3f".format(item.lat)},${"%.3f".format(item.lon)}"
-                    if (inserted.contains(key)) return@mapNotNull null
+                    val key = "${"%.4f".format(item.lat)},${"%.4f".format(item.lon)}"
+                    if (key in inserted) return@mapNotNull null
                     inserted.add(key)
-                    val cat = guessCategory(item.name)
                     LandmarkEntity(
                         name      = item.name,
-                        summary   = item.snippet,
+                        summary   = "",
                         lat       = item.lat,
                         lon       = item.lon,
-                        category  = cat,
+                        category  = guessCategory(item.name),
                         continent = cont.continent,
                         wikiId    = item.pageId
                     )
@@ -116,43 +127,43 @@ object WikiFetcher {
                     )
                 }
 
-                // Be polite to Wikipedia API
-                delay(300)
+                delay(200)   // polite pause — avoids rate-limit 429
 
+            } catch (e: CancellationException) {
+                throw e      // always re-throw cancellation
             } catch (e: Exception) {
                 Log.w(TAG, "${cont.displayName} seed error: ${e.message}")
-                delay(500)
+                delay(800)   // back-off on error
             }
         }
 
         Log.d(TAG, "${cont.displayName} done: $fetched inserted")
     }
 
-    private data class GeoItem(
-        val pageId: Int,
-        val name:   String,
-        val snippet: String,
-        val lat:    Double,
-        val lon:    Double
-    )
+    // ── Wikipedia geosearch ───────────────────────────────────────────────────
+
+    private data class GeoItem(val pageId: Int, val name: String, val lat: Double, val lon: Double)
 
     /**
-     * Wikipedia geosearch: returns up to 50 geolocated articles near a point.
-     * Every result is guaranteed to have coordinates — no extra coordinate lookup needed.
+     * Synchronous OkHttp call — safe to call inside Dispatchers.IO coroutine.
+     * radiusM must be ≤ 10 000 (Wikipedia API hard limit).
      */
-    private suspend fun geosearch(lat: Double, lon: Double, radiusKm: Int = 80): List<GeoItem> =
-        withContext(Dispatchers.IO) {
-            val url = "https://en.wikipedia.org/w/api.php" +
-                "?action=query&list=geosearch" +
-                "&gscoord=${lat}|${lon}" +
-                "&gsradius=${radiusKm * 1000}" +   // metres
-                "&gslimit=50" +
-                "&format=json"
+    private fun geosearch(lat: Double, lon: Double, radiusM: Int = 8_000): List<GeoItem> {
+        val safeRadius = radiusM.coerceIn(1, 10_000)
+        val url = "https://en.wikipedia.org/w/api.php" +
+            "?action=query&list=geosearch" +
+            "&gscoord=${lat}|${lon}" +
+            "&gsradius=${safeRadius}" +
+            "&gslimit=50" +
+            "&format=json"
 
-            val body = fetch(url) ?: return@withContext emptyList()
-            val arr  = JSONObject(body)
+        val body = fetchSync(url) ?: return emptyList()
+
+        return try {
+            val arr = JSONObject(body)
                 .optJSONObject("query")
-                ?.optJSONArray("geosearch") ?: return@withContext emptyList()
+                ?.optJSONArray("geosearch")
+                ?: return emptyList()
 
             (0 until arr.length()).mapNotNull { i ->
                 val obj = arr.getJSONObject(i)
@@ -160,16 +171,20 @@ object WikiFetcher {
                 val ln  = obj.optDouble("lon", Double.NaN)
                 if (lt.isNaN() || ln.isNaN()) return@mapNotNull null
                 GeoItem(
-                    pageId  = obj.optInt("pageid", 0),
-                    name    = obj.optString("title", ""),
-                    snippet = "",   // geosearch doesn't return extracts; keep empty for speed
-                    lat     = lt,
-                    lon     = ln
+                    pageId = obj.optInt("pageid", 0),
+                    name   = obj.optString("title", ""),
+                    lat    = lt,
+                    lon    = ln
                 )
             }
+        } catch (e: Exception) {
+            Log.e(TAG, "JSON parse error: ${e.message}")
+            emptyList()
         }
+    }
 
-    /** Heuristic category from article title keywords */
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
     private fun guessCategory(title: String): String {
         val lower = title.lowercase()
         for ((cat, kws) in CATEGORY_KEYWORDS) {
@@ -178,39 +193,47 @@ object WikiFetcher {
         return "landmark"
     }
 
-    /** Generate a grid of (lat, lon) seeds covering a bounding box */
     private fun generateSeeds(
         latMin: Double, latMax: Double,
         lonMin: Double, lonMax: Double,
-        count: Int
+        count:  Int
     ): MutableList<Pair<Double, Double>> {
-        val sqrt  = Math.sqrt(count.toDouble()).toInt().coerceAtLeast(1)
-        val latStep = (latMax - latMin) / sqrt
-        val lonStep = (lonMax - lonMin) / sqrt
-        val result = mutableListOf<Pair<Double, Double>>()
-        var lat = latMin + latStep / 2
-        while (lat < latMax) {
-            var lon = lonMin + lonStep / 2
-            while (lon < lonMax) {
-                // Add small random jitter so repeated runs surface different articles
-                val jLat = lat + (Math.random() - 0.5) * latStep * 0.5
-                val jLon = lon + (Math.random() - 0.5) * lonStep * 0.5
-                result.add(Pair(jLat.coerceIn(latMin, latMax), jLon.coerceIn(lonMin, lonMax)))
-                lon += lonStep
+        val side    = Math.sqrt(count.toDouble()).toInt().coerceAtLeast(2)
+        val latStep = (latMax - latMin) / side
+        val lonStep = (lonMax - lonMin) / side
+        val result  = mutableListOf<Pair<Double, Double>>()
+        var la = latMin + latStep / 2.0
+        while (la < latMax) {
+            var lo = lonMin + lonStep / 2.0
+            while (lo < lonMax) {
+                val jLat = la + (Math.random() - 0.5) * latStep * 0.4
+                val jLon = lo + (Math.random() - 0.5) * lonStep * 0.4
+                result.add(jLat.coerceIn(latMin, latMax) to jLon.coerceIn(lonMin, lonMax))
+                lo += lonStep
             }
-            lat += latStep
+            la += latStep
         }
         return result
     }
 
-    private fun fetch(url: String): String? = try {
+    /**
+     * Synchronous HTTP GET — must only be called from a background thread / IO dispatcher.
+     * Returns null on any error (logged).
+     */
+    private fun fetchSync(url: String): String? = try {
         val req = Request.Builder()
             .url(url)
             .header("User-Agent", "PikminGPSMocker/2.1 Android (com.devtool.gpsmocker)")
             .build()
-        client.newCall(req).execute().use { it.body?.string() }
+        client.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) {
+                Log.w(TAG, "HTTP ${resp.code} for $url")
+                return null
+            }
+            resp.body?.string()
+        }
     } catch (e: Exception) {
-        Log.e(TAG, "fetch error: ${e.message}")
+        Log.e(TAG, "fetchSync error: ${e.message}")
         null
     }
 }

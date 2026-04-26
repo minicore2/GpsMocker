@@ -127,11 +127,15 @@ class SettingsFragment : Fragment() {
     private fun startFetch() {
         val ctx = context ?: return
         setFetchUI(running = true)
-        _b?.tvFetchProgress?.text = "準備抓取…"
+        _b?.tvFetchProgress?.text = "連線中…"
+
+        // onProgress is called from Dispatchers.IO — use Handler to reach main thread.
+        // Do NOT use activity?.runOnUiThread which can be null-unsafe.
+        val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
         WikiFetcher.onProgress = { continent, fetched, target, msg ->
-            activity?.runOnUiThread {
-                val binding = _b ?: return@runOnUiThread
+            mainHandler.post {
+                val binding = _b ?: return@post
                 binding.tvFetchProgress?.text = msg
                 val pct = if (target > 0) (fetched * 100 / target).coerceIn(0, 100) else 0
                 binding.progressFetch?.progress = pct
@@ -147,10 +151,12 @@ class SettingsFragment : Fragment() {
             try {
                 WikiFetcher.fetchAll(ctx)
             } catch (e: CancellationException) {
-                // user stopped
+                // user pressed stop — normal
+                mainHandler.post { _b?.tvFetchProgress?.text = "已停止" }
             } catch (e: Exception) {
-                activity?.runOnUiThread {
-                    toast("抓取失敗：${e.message}")
+                android.util.Log.e("SettingsFragment", "fetchAll failed", e)
+                mainHandler.post {
+                    toast("抓取失敗：${e.message ?: e.javaClass.simpleName}")
                     setFetchUI(running = false)
                 }
             }
