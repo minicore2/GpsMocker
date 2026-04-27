@@ -203,6 +203,50 @@
                     android:textColor="@color/error"
                     android:visibility="gone"/>
 
+                <!-- Divider -->
+                <View android:layout_width="match_parent" android:layout_height="1dp"
+                    android:background="#2A3050" android:layout_marginVertical="10dp"/>
+
+                <!-- Export / Import row -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal">
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnExportCsv"
+                        style="@style/Widget.Material3.Button.OutlinedButton"
+                        android:layout_width="0dp"
+                        android:layout_height="40dp"
+                        android:layout_weight="1"
+                        android:layout_marginEnd="6dp"
+                        android:text="📤 匯出 CSV"
+                        android:textSize="12sp"
+                        android:strokeColor="@color/accent"
+                        android:textColor="@color/accent"/>
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnImportCsv"
+                        style="@style/Widget.Material3.Button.OutlinedButton"
+                        android:layout_width="0dp"
+                        android:layout_height="40dp"
+                        android:layout_weight="1"
+                        android:text="📥 匯入 CSV"
+                        android:textSize="12sp"
+                        android:strokeColor="@color/accent"
+                        android:textColor="@color/accent"/>
+                </LinearLayout>
+
+                <TextView android:id="@+id/tvCsvStatus"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text=""
+                    android:textColor="@color/text_secondary"
+                    android:textSize="11sp"
+                    android:fontFamily="monospace"
+                    android:layout_marginTop="4dp"
+                    android:visibility="gone"/>
+
             </LinearLayout>
         </androidx.cardview.widget.CardView>
 

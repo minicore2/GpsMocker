@@ -1,8 +1,11 @@
 package com.devtool.gpsmocker.ui.fragments
 
+import android.app.Activity
+import android.content.Intent
 import android.os.Bundle
 import android.view.*
 import android.widget.*
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.fragment.app.Fragment
 import androidx.health.connect.client.PermissionController
 import androidx.lifecycle.lifecycleScope
@@ -19,6 +22,8 @@ class SettingsFragment : Fragment() {
 
     private var fetchJob: Job? = null
 
+    // ── Health Connect permission launcher ────────────────────────────────────
+
     private val hcPermLauncher = registerForActivityResult(
         PermissionController.createRequestPermissionResultContract()
     ) { granted ->
@@ -33,6 +38,18 @@ class SettingsFragment : Fragment() {
         }
     }
 
+    // ── CSV import file picker ─────────────────────────────────────────────────
+
+    private val csvPickerLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            result.data?.data?.let { uri -> importCsv(uri) }
+        }
+    }
+
+    // ── Lifecycle ─────────────────────────────────────────────────────────────
+
     override fun onCreateView(i: LayoutInflater, c: ViewGroup?, s: Bundle?): View {
         _b = FragmentSettingsBinding.inflate(i, c, false)
         return _b!!.root
@@ -45,7 +62,7 @@ class SettingsFragment : Fragment() {
         refreshDbStats()
     }
 
-    // ── Settings load ─────────────────────────────
+    // ── Settings ──────────────────────────────────────────────────────────────
 
     private fun loadSettings() {
         val binding = _b ?: return
@@ -70,11 +87,12 @@ class SettingsFragment : Fragment() {
         binding.rgStepBackend.check(if (preferHC) binding.rbStepHC.id else binding.rbStepLocal.id)
     }
 
-    // ── Listeners ─────────────────────────────────
+    // ── Listeners ─────────────────────────────────────────────────────────────
 
     private fun setupListeners() {
         val binding = _b ?: return
 
+        // Speed slider
         binding.seekSpeed.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(sb: SeekBar, p: Int, u: Boolean) {
                 val ctx = context ?: return
@@ -86,6 +104,7 @@ class SettingsFragment : Fragment() {
             override fun onStopTrackingTouch(sb: SeekBar) {}
         })
 
+        // Start-from
         binding.rgStartFrom.setOnCheckedChangeListener { _, id ->
             val ctx = context ?: return@setOnCheckedChangeListener
             val sf = when (id) {
@@ -96,6 +115,7 @@ class SettingsFragment : Fragment() {
             AppPrefs.saveStartFrom(ctx, sf)
         }
 
+        // Step backend
         binding.rgStepBackend.setOnCheckedChangeListener { _, id ->
             val ctx = context ?: return@setOnCheckedChangeListener
             val useHc = id == binding.rbStepHC.id
@@ -103,6 +123,7 @@ class SettingsFragment : Fragment() {
             vm.setPreferHC(ctx, useHc)
         }
 
+        // Health Connect auth
         binding.btnConnectHC.setOnClickListener {
             lifecycleScope.launch {
                 val ctx = context ?: return@launch
@@ -117,20 +138,22 @@ class SettingsFragment : Fragment() {
             }
         }
 
-        // ── Landmark DB fetch ──────────────────────
+        // Landmark DB fetch
         binding.btnFetchLandmarks.setOnClickListener { startFetch() }
         binding.btnStopFetch.setOnClickListener     { stopFetch() }
+
+        // CSV export / import
+        binding.btnExportCsv.setOnClickListener { exportCsv() }
+        binding.btnImportCsv.setOnClickListener { openCsvPicker() }
     }
 
-    // ── Landmark DB fetch ─────────────────────────
+    // ── Landmark DB fetch ──────────────────────────────────────────────────────
 
     private fun startFetch() {
         val ctx = context ?: return
         setFetchUI(running = true)
         _b?.tvFetchProgress?.text = "連線中…"
 
-        // onProgress is called from Dispatchers.IO — use Handler to reach main thread.
-        // Do NOT use activity?.runOnUiThread which can be null-unsafe.
         val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
         WikiFetcher.onProgress = { continent, fetched, target, msg ->
@@ -151,7 +174,6 @@ class SettingsFragment : Fragment() {
             try {
                 WikiFetcher.fetchAll(ctx)
             } catch (e: CancellationException) {
-                // user pressed stop — normal
                 mainHandler.post { _b?.tvFetchProgress?.text = "已停止" }
             } catch (e: Exception) {
                 android.util.Log.e("SettingsFragment", "fetchAll failed", e)
@@ -176,18 +198,86 @@ class SettingsFragment : Fragment() {
         val binding = _b ?: return
         binding.btnFetchLandmarks?.isEnabled = !running
         binding.btnStopFetch?.visibility =
-            if (running) android.view.View.VISIBLE else android.view.View.GONE
+            if (running) View.VISIBLE else View.GONE
         binding.progressFetch?.visibility =
-            if (running) android.view.View.VISIBLE else android.view.View.GONE
+            if (running) View.VISIBLE else View.GONE
         binding.tvFetchProgress?.visibility =
-            if (running) android.view.View.VISIBLE else android.view.View.GONE
+            if (running) View.VISIBLE else View.GONE
     }
+
+    // ── CSV export ─────────────────────────────────────────────────────────────
+
+    private fun exportCsv() {
+        val ctx = context ?: return
+        _b?.tvCsvStatus?.visibility = View.VISIBLE
+        _b?.tvCsvStatus?.text = "匯出中…"
+        _b?.btnExportCsv?.isEnabled = false
+
+        lifecycleScope.launch {
+            val uri = CsvHelper.exportToCsv(ctx)
+            val binding = _b ?: return@launch
+            binding.btnExportCsv?.isEnabled = true
+
+            if (uri == null) {
+                binding.tvCsvStatus?.text = "⚠️ 資料庫是空的，無法匯出"
+                return@launch
+            }
+
+            binding.tvCsvStatus?.text = "✅ 匯出完成，選擇傳送方式…"
+
+            // Share the file — user can choose Google Drive, Files, AirDrop, etc.
+            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                type = "text/csv"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(Intent.EXTRA_SUBJECT, "PikminGPSMocker 地標資料")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(Intent.createChooser(shareIntent, "匯出 CSV 到…"))
+        }
+    }
+
+    // ── CSV import ─────────────────────────────────────────────────────────────
+
+    private fun openCsvPicker() {
+        val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+            type = "*/*"
+            // Accept CSV and plain text
+            putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("text/csv", "text/plain", "application/octet-stream"))
+            addCategory(Intent.CATEGORY_OPENABLE)
+        }
+        csvPickerLauncher.launch(intent)
+    }
+
+    private fun importCsv(uri: android.net.Uri) {
+        val ctx = context ?: return
+        _b?.tvCsvStatus?.visibility = View.VISIBLE
+        _b?.tvCsvStatus?.text = "匯入中…"
+        _b?.btnImportCsv?.isEnabled = false
+
+        lifecycleScope.launch {
+            val result  = CsvHelper.importFromCsv(ctx, uri)
+            val binding = _b ?: return@launch
+            binding.btnImportCsv?.isEnabled = true
+
+            val msg = buildString {
+                append("✅ 匯入完成\n")
+                append("新增：${result.inserted} 筆  ")
+                append("略過（重複）：${result.skipped} 筆")
+                if (result.errors > 0) append("  錯誤：${result.errors} 筆")
+            }
+            binding.tvCsvStatus?.text = msg
+
+            refreshDbStats()
+        }
+    }
+
+    // ── DB stats ───────────────────────────────────────────────────────────────
 
     private fun refreshDbStats() {
         val ctx = context ?: return
         lifecycleScope.launch {
-            val count = WikiLandmarkHelper.dbCount(ctx)
-            val stats = WikiLandmarkHelper.dbStats(ctx)
+            val count   = WikiLandmarkHelper.dbCount(ctx)
+            val stats   = WikiLandmarkHelper.dbStats(ctx)
             val binding = _b ?: return@launch
             if (count == 0) {
                 binding.tvLandmarkDbStats?.text = "資料庫：空（點下方按鈕從 Wikipedia 抓取）"
@@ -198,7 +288,7 @@ class SettingsFragment : Fragment() {
         }
     }
 
-    // ── Helpers ───────────────────────────────────
+    // ── Helpers ────────────────────────────────────────────────────────────────
 
     private fun updateSpeedLabel(mps: Double) {
         val tag = when {

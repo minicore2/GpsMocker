@@ -9,18 +9,14 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
-import kotlin.coroutines.coroutineContext
 
 object WikiFetcher {
 
     private const val TAG = "WikiFetcher"
     private const val TARGET_PER_CONTINENT = 500
 
-    // Progress callback — always invoked on the coroutine thread;
-    // SettingsFragment posts to main thread itself.
     var onProgress: ((String, Int, Int, String) -> Unit)? = null
 
-    // Single OkHttpClient reused across all requests
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
@@ -60,51 +56,89 @@ object WikiFetcher {
     // ── Public entry point ────────────────────────────────────────────────────
 
     /**
-     * Must be called from a non-main coroutine (e.g. Dispatchers.IO).
-     * Clears the DB, then fetches all continents sequentially.
+     * Incrementally update the landmark DB.
+     *
+     * Key behaviours:
+     *  - Does NOT call deleteAll() — existing data is preserved.
+     *  - Loads all existing wikiIds into a HashSet before starting so every
+     *    geosearch result is checked in O(1). Articles already in the DB are
+     *    skipped immediately without any insert attempt, saving bandwidth and
+     *    DB writes.
+     *  - TARGET_PER_CONTINENT counts only *newly inserted* rows for each
+     *    continent in this session, so a fresh run adds up to 500 new entries
+     *    per continent on top of what's already there.
      */
     suspend fun fetchAll(context: Context) = withContext(Dispatchers.IO) {
         val dao = LandmarkDatabase.get(context).landmarkDao()
-        dao.deleteAll()
 
-        for (cont in CONTINENTS) {
-            coroutineContext.ensureActive()   // stop immediately if job was cancelled
-            fetchForContinent(dao, cont)
+        // ── Build dedup sets from the existing DB ──────────────────────────
+        // wikiId > 0: articles fetched from Wikipedia (primary dedup key)
+        val existingWikiIds: HashSet<Int> = HashSet(dao.getAllWikiIds())
+
+        // lat/lon rounded to 4dp: covers manually imported rows with wikiId=0
+        val existingLatLon: HashSet<String> = dao.getAllLatLon().mapTo(HashSet()) {
+            "${"%.4f".format(it.lat)},${"%.4f".format(it.lon)}"
         }
 
-        val total = dao.count()
-        onProgress?.invoke("完成", total, total, "✅ 地標庫更新完成，共 $total 個地點")
+        val beforeTotal = dao.count()
+        Log.d(TAG, "Starting incremental fetch. DB has $beforeTotal entries, " +
+                   "${existingWikiIds.size} with wikiId, ${existingLatLon.size} lat/lon only.")
+
+        onProgress?.invoke("開始", beforeTotal, beforeTotal,
+            "已有 $beforeTotal 個地點，開始增量更新…")
+
+        for (cont in CONTINENTS) {
+            currentCoroutineContext().ensureActive()
+            fetchForContinent(dao, cont, existingWikiIds, existingLatLon)
+        }
+
+        val afterTotal = dao.count()
+        val added = afterTotal - beforeTotal
+        onProgress?.invoke("完成", afterTotal, afterTotal,
+            "✅ 更新完成，新增 $added 個，共 $afterTotal 個地點")
     }
 
     // ── Per-continent fetch ────────────────────────────────────────────────────
 
     private suspend fun fetchForContinent(
-        dao: com.devtool.gpsmocker.db.LandmarkDao,
-        cont: ContDef
+        dao:              com.devtool.gpsmocker.db.LandmarkDao,
+        cont:             ContDef,
+        existingWikiIds:  HashSet<Int>,
+        existingLatLon:   HashSet<String>
     ) {
-        val inserted = mutableSetOf<String>()
-        var fetched  = 0
+        // newThisSession tracks how many *new* rows we added for this continent
+        // in the current run. We stop at TARGET_PER_CONTINENT new additions.
+        var newThisSession = 0
 
-        // Wikipedia geosearch radius is capped at 10 000 m.
-        // Use many small seeds (radius 8 km each) spread across the bounding box.
         val seeds = generateSeeds(cont.latMin, cont.latMax, cont.lonMin, cont.lonMax, count = 120)
         seeds.shuffle()
 
         onProgress?.invoke(cont.displayName, 0, TARGET_PER_CONTINENT,
-            "${cont.displayName}：開始抓取…")
+            "${cont.displayName}：開始增量抓取…")
 
         for (seed in seeds) {
-            coroutineContext.ensureActive()
-            if (fetched >= TARGET_PER_CONTINENT) break
+            currentCoroutineContext().ensureActive()
+            if (newThisSession >= TARGET_PER_CONTINENT) break
 
             try {
-                // radius 8000 m stays safely within the 10 000 m limit
                 val batch = geosearch(seed.first, seed.second, radiusM = 8_000)
 
                 val entities = batch.mapNotNull { item ->
-                    val key = "${"%.4f".format(item.lat)},${"%.4f".format(item.lon)}"
-                    if (key in inserted) return@mapNotNull null
-                    inserted.add(key)
+                    // ── Skip if already in DB (primary check: wikiId) ──────
+                    if (item.pageId > 0 && item.pageId in existingWikiIds) {
+                        return@mapNotNull null   // already have it — skip, save bandwidth
+                    }
+
+                    // ── Skip if lat/lon duplicate (handles wikiId=0 imports) ─
+                    val latLonKey = "${"%.4f".format(item.lat)},${"%.4f".format(item.lon)}"
+                    if (latLonKey in existingLatLon) {
+                        return@mapNotNull null
+                    }
+
+                    // ── New entry — register in both dedup sets immediately ──
+                    if (item.pageId > 0) existingWikiIds.add(item.pageId)
+                    existingLatLon.add(latLonKey)
+
                     LandmarkEntity(
                         name      = item.name,
                         summary   = "",
@@ -118,36 +152,32 @@ object WikiFetcher {
 
                 if (entities.isNotEmpty()) {
                     dao.insertAll(entities)
-                    fetched += entities.size
+                    newThisSession += entities.size
                     onProgress?.invoke(
                         cont.displayName,
-                        fetched,
+                        newThisSession,
                         TARGET_PER_CONTINENT,
-                        "${cont.displayName}：已抓取 $fetched / $TARGET_PER_CONTINENT"
+                        "${cont.displayName}：本次新增 $newThisSession / $TARGET_PER_CONTINENT"
                     )
                 }
 
-                delay(200)   // polite pause — avoids rate-limit 429
+                delay(200)
 
             } catch (e: CancellationException) {
-                throw e      // always re-throw cancellation
+                throw e
             } catch (e: Exception) {
                 Log.w(TAG, "${cont.displayName} seed error: ${e.message}")
-                delay(800)   // back-off on error
+                delay(800)
             }
         }
 
-        Log.d(TAG, "${cont.displayName} done: $fetched inserted")
+        Log.d(TAG, "${cont.displayName} done: $newThisSession new entries this session")
     }
 
     // ── Wikipedia geosearch ───────────────────────────────────────────────────
 
     private data class GeoItem(val pageId: Int, val name: String, val lat: Double, val lon: Double)
 
-    /**
-     * Synchronous OkHttp call — safe to call inside Dispatchers.IO coroutine.
-     * radiusM must be ≤ 10 000 (Wikipedia API hard limit).
-     */
     private fun geosearch(lat: Double, lon: Double, radiusM: Int = 8_000): List<GeoItem> {
         val safeRadius = radiusM.coerceIn(1, 10_000)
         val url = "https://en.wikipedia.org/w/api.php" +
@@ -216,10 +246,6 @@ object WikiFetcher {
         return result
     }
 
-    /**
-     * Synchronous HTTP GET — must only be called from a background thread / IO dispatcher.
-     * Returns null on any error (logged).
-     */
     private fun fetchSync(url: String): String? = try {
         val req = Request.Builder()
             .url(url)

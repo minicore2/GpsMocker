@@ -30,8 +30,22 @@ interface LandmarkDao {
     @Query("SELECT continent, COUNT(*) as cnt FROM landmarks GROUP BY continent ORDER BY cnt DESC")
     suspend fun statsByContinent(): List<ContinentStat>
 
+    /** Return all landmarks (for CSV export) */
+    @Query("SELECT * FROM landmarks ORDER BY continent, name")
+    suspend fun getAll(): List<LandmarkEntity>
+
+    /** Return all wikiIds that already exist (for fast dedup during fetch) */
+    @Query("SELECT wikiId FROM landmarks WHERE wikiId > 0")
+    suspend fun getAllWikiIds(): List<Int>
+
+    /** Return all lat/lon keys for entries with wikiId=0 (name-only dedup) */
+    @Query("SELECT lat, lon FROM landmarks WHERE wikiId = 0")
+    suspend fun getAllLatLon(): List<LatLonOnly>
+
     @Query("DELETE FROM landmarks")
     suspend fun deleteAll()
 }
+
+data class LatLonOnly(val lat: Double, val lon: Double)
 
 data class ContinentStat(val continent: String, val cnt: Int)
