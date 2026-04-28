@@ -100,6 +100,8 @@ class MapFragment : Fragment() {
         setupSearch()
         setupModeToggle()
         setupButtons()
+        // Jump map to the relevant start position immediately on launch
+        jumpToInitialPosition()
         // Restore running state indicator if service is already running
         if (svc?.isRunning == true) setRunning(true)
         vm.sessionSteps.observe(viewLifecycleOwner) { /* stats fragment handles display */ }
@@ -134,6 +136,40 @@ class MapFragment : Fragment() {
     }
 
     // ── Map setup ─────────────────────────────────
+
+    /**
+     * On app launch, move the map to wherever the user is most likely to start:
+     *  - LAST_POSITION setting → jump to last simulated position
+     *  - DEVICE_GPS setting   → jump to current device GPS location
+     *  - NONE / fallback      → stay at default (Taipei 101)
+     * Called once from onViewCreated, after the map is initialised.
+     */
+    private fun jumpToInitialPosition() {
+        val ctx = context ?: return
+        when (AppPrefs.loadStartFrom(ctx)) {
+            AppPrefs.StartFrom.LAST_POSITION -> {
+                val last = LastPositionStore.load(ctx)
+                if (last != null) {
+                    b?.mapView?.controller?.setCenter(last)
+                    b?.mapView?.controller?.setZoom(16.0)
+                }
+                // If no last position yet, keep default centre
+            }
+            AppPrefs.StartFrom.DEVICE_GPS -> {
+                // getDeviceGpsPosition() reads last-known location synchronously —
+                // fast enough for UI init, no need for a coroutine here.
+                val gps = getDeviceGpsPosition()
+                if (gps != null) {
+                    b?.mapView?.controller?.setCenter(gps)
+                    b?.mapView?.controller?.setZoom(16.0)
+                }
+            }
+            AppPrefs.StartFrom.NONE -> {
+                // Keep default centre (Taipei 101) — no action needed
+            }
+        }
+    }
+
 
     private fun setupMap() {
         val binding = b ?: return
@@ -294,6 +330,9 @@ class MapFragment : Fragment() {
         when (mode) {
             Mode.FIXED -> {
                 val pt = fixedMarker?.position ?: run { toast("請先點選地圖設定位置"); return }
+                // Jump map to the fixed point immediately when simulation starts
+                b?.mapView?.controller?.animateTo(pt)
+                b?.mapView?.controller?.setZoom(16.0)
                 s.startFixedPoint(pt)
                 setRunning(true)
             }
@@ -305,6 +344,15 @@ class MapFragment : Fragment() {
 
                 val looping = b?.cbLoop?.isChecked ?: AppPrefs.loadLoop(ctx)
                 val startPt = overrideStart ?: waypoints.first()
+
+                // Jump map to the actual start point immediately so user sees where
+                // the simulation begins — especially important when using
+                // "last position" or "device GPS" which may be far from current view.
+                b?.mapView?.controller?.animateTo(startPt)
+                if (overrideStart != null) {
+                    // Override start is away from user-placed waypoints — zoom in
+                    b?.mapView?.controller?.setZoom(16.0)
+                }
 
                 placeMovingMarker(startPt)
                 wireCallbacks(s)
@@ -399,8 +447,10 @@ class MapFragment : Fragment() {
             }
 
             val point = result.point
+
+            // Animate map to the landmark immediately (before placing marker)
             b?.mapView?.controller?.animateTo(point)
-            b?.mapView?.controller?.setZoom(15.0)
+            b?.mapView?.controller?.setZoom(16.0)
 
             when (mode) {
                 Mode.FIXED -> {

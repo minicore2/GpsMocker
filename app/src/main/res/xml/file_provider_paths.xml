@@ -1,5 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
-    <!-- cache dir: used for CSV export temp file -->
     <cache-path name="csv_export" path="." />
 </paths>

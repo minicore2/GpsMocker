@@ -203,11 +203,9 @@
                     android:textColor="@color/error"
                     android:visibility="gone"/>
 
-                <!-- Divider -->
                 <View android:layout_width="match_parent" android:layout_height="1dp"
                     android:background="#2A3050" android:layout_marginVertical="10dp"/>
 
-                <!-- Export / Import row -->
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"

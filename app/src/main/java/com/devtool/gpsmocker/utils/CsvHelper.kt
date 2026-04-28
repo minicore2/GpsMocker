@@ -11,174 +11,110 @@ import kotlinx.coroutines.withContext
 import java.io.*
 
 object CsvHelper {
+    private const val TAG       = "CsvHelper"
+    private const val HEADER    = "name,lat,lon,category,continent,summary,wikiId"
+    private const val AUTHORITY = "com.devtool.gpsmocker.fileprovider"
 
-    private const val TAG        = "CsvHelper"
-    private const val CSV_HEADER = "name,lat,lon,category,continent,summary,wikiId"
-    private const val AUTHORITY  = "com.devtool.gpsmocker.fileprovider"
-
-    // ── Export ────────────────────────────────────────────────────────────────
-
-    /**
-     * Export all landmarks to a CSV file in the app's cache dir.
-     * Returns a content:// URI (via FileProvider) ready to share/save,
-     * or null on failure.
-     */
     suspend fun exportToCsv(context: Context): Uri? = withContext(Dispatchers.IO) {
         try {
-            val dao       = LandmarkDatabase.get(context).landmarkDao()
-            val landmarks = dao.getAll()
-            if (landmarks.isEmpty()) return@withContext null
-
+            val rows = LandmarkDatabase.get(context).landmarkDao().getAll()
+            if (rows.isEmpty()) return@withContext null
             val file = File(context.cacheDir, "landmarks_export.csv")
             BufferedWriter(FileWriter(file)).use { w ->
-                w.write(CSV_HEADER)
-                w.newLine()
-                for (lm in landmarks) {
-                    w.write(encodeCsvRow(lm))
-                    w.newLine()
-                }
+                w.write(HEADER); w.newLine()
+                rows.forEach { w.write(toRow(it)); w.newLine() }
             }
-
-            Log.d(TAG, "Exported ${landmarks.size} rows to ${file.absolutePath}")
-
             FileProvider.getUriForFile(context, AUTHORITY, file)
-        } catch (e: Exception) {
-            Log.e(TAG, "Export failed: ${e.message}", e)
-            null
-        }
+        } catch (e: Exception) { Log.e(TAG, "export: ${e.message}", e); null }
     }
-
-    // ── Import ────────────────────────────────────────────────────────────────
 
     data class ImportResult(val inserted: Int, val skipped: Int, val errors: Int)
 
-    /**
-     * Import landmarks from a CSV Uri (picked via system file picker).
-     * Accepts files with or without the header row.
-     * Duplicate lat/lon entries are silently skipped (Room IGNORE strategy).
-     */
     suspend fun importFromCsv(context: Context, uri: Uri): ImportResult =
         withContext(Dispatchers.IO) {
-            var inserted = 0
-            var skipped  = 0
-            var errors   = 0
-
+            var inserted = 0; var skipped = 0; var errors = 0
             try {
                 val dao = LandmarkDatabase.get(context).landmarkDao()
-
                 context.contentResolver.openInputStream(uri)?.use { stream ->
                     BufferedReader(InputStreamReader(stream)).use { reader ->
                         val batch = mutableListOf<LandmarkEntity>()
-
-                        var rawLine: String?
-                        while (reader.readLine().also { rawLine = it } != null) {
-                            val line = rawLine?.trim() ?: ""
-                            if (line.isEmpty()) continue
-
-                            // Skip header row (matches our own header or generic "name,lat,lon")
-                            if (line.startsWith("name,", ignoreCase = true) ||
-                                line.startsWith("Name,", ignoreCase = true)) {
-                                continue
-                            }
-
-                            try {
-                                val cols = parseCsvRow(line)
-                                if (cols.size < 3) { skipped++; continue }
-
-                                val name = cols[0].trim()
-                                val lat  = cols[1].trim().toDoubleOrNull()
-                                val lon  = cols[2].trim().toDoubleOrNull()
-
-                                if (name.isBlank() || lat == null || lon == null ||
-                                    lat !in -90.0..90.0 || lon !in -180.0..180.0) {
-                                    skipped++; continue
+                        var rawLine: String? = reader.readLine()
+                        while (rawLine != null) {
+                            val line = rawLine.trim()
+                            if (line.isNotEmpty() && !line.startsWith("name,", true) &&
+                                !line.startsWith("Name,")) {
+                                try {
+                                    val cols = parseCsv(line)
+                                    if (cols.size >= 3) {
+                                        val name = cols[0].trim()
+                                        val lat = cols[1].trim().toDoubleOrNull()
+                                        val lon = cols[2].trim().toDoubleOrNull()
+                                        if (name.isNotBlank() && lat != null && lon != null &&
+                                            lat in -90.0..90.0 && lon in -180.0..180.0
+                                        ) {
+                                            batch.add(
+                                                LandmarkEntity(
+                                                    name = name, lat = lat, lon = lon,
+                                                    category = cols.getOrNull(3)?.trim() ?: "landmark",
+                                                    continent = cols.getOrNull(4)?.trim() ?: "",
+                                                    summary = cols.getOrNull(5)?.trim() ?: "",
+                                                    wikiId = cols.getOrNull(6)?.trim()?.toIntOrNull() ?: 0
+                                                )
+                                            )
+                                            if (batch.size >= 200) {
+                                                val before = dao.count()
+                                                dao.insertAll(batch)
+                                                inserted += dao.count() - before
+                                                skipped += batch.size - (dao.count() - before)
+                                                batch.clear()
+                                            }
+                                        } else {
+                                            skipped++
+                                        }
+                                    } else {
+                                        skipped++
+                                    }
+                                } catch (e: Exception) {
+                                    errors++
                                 }
-
-                                batch.add(LandmarkEntity(
-                                    name      = name,
-                                    lat       = lat,
-                                    lon       = lon,
-                                    category  = cols.getOrNull(3)?.trim() ?: "landmark",
-                                    continent = cols.getOrNull(4)?.trim() ?: "",
-                                    summary   = cols.getOrNull(5)?.trim() ?: "",
-                                    wikiId    = cols.getOrNull(6)?.trim()?.toIntOrNull() ?: 0
-                                ))
-
-                                // Flush in batches of 200 for memory efficiency
-                                if (batch.size >= 200) {
-                                    val before = dao.count()
-                                    dao.insertAll(batch)
-                                    val after  = dao.count()
-                                    inserted  += (after - before)
-                                    skipped   += batch.size - (after - before)
-                                    batch.clear()
-                                }
-
-                            } catch (e: Exception) {
-                                Log.w(TAG, "Row parse error: $line → ${e.message}")
-                                errors++
                             }
+                            rawLine = reader.readLine()
                         }
-
-                        // Flush remaining
                         if (batch.isNotEmpty()) {
                             val before = dao.count()
                             dao.insertAll(batch)
-                            val after  = dao.count()
-                            inserted  += (after - before)
-                            skipped   += batch.size - (after - before)
+                            inserted += dao.count() - before
+                            skipped += batch.size - (dao.count() - before)
                         }
                     }
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "Import failed: ${e.message}", e)
-                errors++
-            }
-
+            } catch (e: Exception) { Log.e(TAG, "import: ${e.message}", e); errors++ }
             ImportResult(inserted, skipped, errors)
         }
 
-    // ── CSV encode / decode ───────────────────────────────────────────────────
+    private fun toRow(lm: LandmarkEntity) = listOf(
+        esc(lm.name), lm.lat, lm.lon, esc(lm.category),
+        esc(lm.continent), esc(lm.summary), lm.wikiId
+    ).joinToString(",")
 
-    private fun encodeCsvRow(lm: LandmarkEntity): String {
-        return listOf(
-            escapeCsv(lm.name),
-            lm.lat.toString(),
-            lm.lon.toString(),
-            escapeCsv(lm.category),
-            escapeCsv(lm.continent),
-            escapeCsv(lm.summary),
-            lm.wikiId.toString()
-        ).joinToString(",")
-    }
+    private fun esc(v: String) =
+        if (v.contains(',') || v.contains('"') || v.contains('\n'))
+            "\"${v.replace("\"","\"\"")}\""
+        else v
 
-    private fun escapeCsv(value: String): String {
-        return if (value.contains(',') || value.contains('"') || value.contains('\n')) {
-            "\"${value.replace("\"", "\"\"")}\""
-        } else value
-    }
-
-    /**
-     * RFC 4180-compliant CSV parser that handles quoted fields with embedded commas/newlines.
-     */
-    private fun parseCsvRow(line: String): List<String> {
-        val cols  = mutableListOf<String>()
-        val cur   = StringBuilder()
-        var inQ   = false
-        var i     = 0
+    private fun parseCsv(line: String): List<String> {
+        val cols = mutableListOf<String>(); val cur = StringBuilder()
+        var inQ = false; var i = 0
         while (i < line.length) {
             val c = line[i]
             when {
-                inQ && c == '"' && i + 1 < line.length && line[i + 1] == '"' -> {
-                    cur.append('"'); i += 2        // escaped quote inside quoted field
-                }
-                inQ && c == '"' -> { inQ = false; i++ }
-                !inQ && c == '"' -> { inQ = true; i++ }
-                !inQ && c == ',' -> { cols.add(cur.toString()); cur.clear(); i++ }
+                inQ && c=='"' && i+1<line.length && line[i+1]=='"' -> { cur.append('"'); i+=2 }
+                inQ && c=='"' -> { inQ=false; i++ }
+                !inQ && c=='"' -> { inQ=true; i++ }
+                !inQ && c==',' -> { cols.add(cur.toString()); cur.clear(); i++ }
                 else -> { cur.append(c); i++ }
             }
         }
-        cols.add(cur.toString())
-        return cols
+        cols.add(cur.toString()); return cols
     }
 }

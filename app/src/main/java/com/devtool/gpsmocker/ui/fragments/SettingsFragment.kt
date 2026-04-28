@@ -19,10 +19,7 @@ class SettingsFragment : Fragment() {
     private var _b: FragmentSettingsBinding? = null
     private val b get() = _b
     private val vm by lazy { SharedViewModel.get(requireActivity()) }
-
     private var fetchJob: Job? = null
-
-    // ── Health Connect permission launcher ────────────────────────────────────
 
     private val hcPermLauncher = registerForActivityResult(
         PermissionController.createRequestPermissionResultContract()
@@ -38,8 +35,6 @@ class SettingsFragment : Fragment() {
         }
     }
 
-    // ── CSV import file picker ─────────────────────────────────────────────────
-
     private val csvPickerLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -47,8 +42,6 @@ class SettingsFragment : Fragment() {
             result.data?.data?.let { uri -> importCsv(uri) }
         }
     }
-
-    // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     override fun onCreateView(i: LayoutInflater, c: ViewGroup?, s: Bundle?): View {
         _b = FragmentSettingsBinding.inflate(i, c, false)
@@ -62,114 +55,85 @@ class SettingsFragment : Fragment() {
         refreshDbStats()
     }
 
-    // ── Settings ──────────────────────────────────────────────────────────────
-
     private fun loadSettings() {
         val binding = _b ?: return
         val ctx = context ?: return
-
         val speed = AppPrefs.loadSpeed(ctx)
         updateSpeedLabel(speed)
         binding.seekSpeed.progress = speedToSlider(speed)
-
         when (AppPrefs.loadStartFrom(ctx)) {
             AppPrefs.StartFrom.NONE          -> binding.rgStartFrom.check(binding.rbStartNone.id)
             AppPrefs.StartFrom.LAST_POSITION -> binding.rgStartFrom.check(binding.rbStartLast.id)
             AppPrefs.StartFrom.DEVICE_GPS    -> binding.rgStartFrom.check(binding.rbStartGPS.id)
         }
-
         val lp = LastPositionStore.load(ctx)
         binding.tvLastPosition.text = lp?.let {
             "上次位置：${"%.6f".format(it.latitude)}, ${"%.6f".format(it.longitude)}"
         } ?: "（尚無上次位置記錄）"
-
         val preferHC = AppPrefs.loadStepBackend(ctx)
         binding.rgStepBackend.check(if (preferHC) binding.rbStepHC.id else binding.rbStepLocal.id)
     }
 
-    // ── Listeners ─────────────────────────────────────────────────────────────
-
     private fun setupListeners() {
         val binding = _b ?: return
 
-        // Speed slider
         binding.seekSpeed.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(sb: SeekBar, p: Int, u: Boolean) {
                 val ctx = context ?: return
-                val spd = sliderToSpeed(p)
-                updateSpeedLabel(spd)
-                AppPrefs.saveSpeed(ctx, spd)
+                val spd = sliderToSpeed(p); updateSpeedLabel(spd); AppPrefs.saveSpeed(ctx, spd)
             }
             override fun onStartTrackingTouch(sb: SeekBar) {}
             override fun onStopTrackingTouch(sb: SeekBar) {}
         })
 
-        // Start-from
         binding.rgStartFrom.setOnCheckedChangeListener { _, id ->
             val ctx = context ?: return@setOnCheckedChangeListener
-            val sf = when (id) {
+            AppPrefs.saveStartFrom(ctx, when (id) {
                 binding.rbStartLast.id -> AppPrefs.StartFrom.LAST_POSITION
                 binding.rbStartGPS.id  -> AppPrefs.StartFrom.DEVICE_GPS
                 else                   -> AppPrefs.StartFrom.NONE
-            }
-            AppPrefs.saveStartFrom(ctx, sf)
+            })
         }
 
-        // Step backend
         binding.rgStepBackend.setOnCheckedChangeListener { _, id ->
             val ctx = context ?: return@setOnCheckedChangeListener
             val useHc = id == binding.rbStepHC.id
-            AppPrefs.saveStepBackend(ctx, useHc)
-            vm.setPreferHC(ctx, useHc)
+            AppPrefs.saveStepBackend(ctx, useHc); vm.setPreferHC(ctx, useHc)
         }
 
-        // Health Connect auth
         binding.btnConnectHC.setOnClickListener {
             lifecycleScope.launch {
                 val ctx = context ?: return@launch
-                if (!HealthConnectHelper.isAvailable(ctx)) {
-                    toast("此裝置不支援 Health Connect"); return@launch
-                }
-                if (HealthConnectHelper.hasPermissions(ctx)) {
-                    vm.refreshSteps(); toast("Health Connect 已授權")
-                } else {
-                    hcPermLauncher.launch(HealthConnectHelper.PERMISSIONS)
-                }
+                if (!HealthConnectHelper.isAvailable(ctx)) { toast("此裝置不支援 Health Connect"); return@launch }
+                if (HealthConnectHelper.hasPermissions(ctx)) { vm.refreshSteps(); toast("Health Connect 已授權") }
+                else hcPermLauncher.launch(HealthConnectHelper.PERMISSIONS)
             }
         }
 
-        // Landmark DB fetch
         binding.btnFetchLandmarks.setOnClickListener { startFetch() }
         binding.btnStopFetch.setOnClickListener     { stopFetch() }
-
-        // CSV export / import
-        binding.btnExportCsv.setOnClickListener { exportCsv() }
-        binding.btnImportCsv.setOnClickListener { openCsvPicker() }
+        binding.btnExportCsv.setOnClickListener     { exportCsv() }
+        binding.btnImportCsv.setOnClickListener     { openCsvPicker() }
     }
 
-    // ── Landmark DB fetch ──────────────────────────────────────────────────────
+    // ── Fetch ─────────────────────────────────────────────────────────────────
 
     private fun startFetch() {
         val ctx = context ?: return
         setFetchUI(running = true)
         _b?.tvFetchProgress?.text = "連線中…"
-
         val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
-
         WikiFetcher.onProgress = { continent, fetched, target, msg ->
             mainHandler.post {
                 val binding = _b ?: return@post
                 binding.tvFetchProgress?.text = msg
-                val pct = if (target > 0) (fetched * 100 / target).coerceIn(0, 100) else 0
-                binding.progressFetch?.progress = pct
+                binding.progressFetch?.progress =
+                    if (target > 0) (fetched * 100 / target).coerceIn(0, 100) else 0
                 if (continent == "完成") {
-                    setFetchUI(running = false)
-                    refreshDbStats()
-                    WikiFetcher.onProgress = null
+                    setFetchUI(running = false); refreshDbStats(); WikiFetcher.onProgress = null
                 }
             }
         }
-
         fetchJob = lifecycleScope.launch(Dispatchers.IO) {
             try {
                 WikiFetcher.fetchAll(ctx)
@@ -177,75 +141,56 @@ class SettingsFragment : Fragment() {
                 mainHandler.post { _b?.tvFetchProgress?.text = "已停止" }
             } catch (e: Exception) {
                 android.util.Log.e("SettingsFragment", "fetchAll failed", e)
-                mainHandler.post {
-                    toast("抓取失敗：${e.message ?: e.javaClass.simpleName}")
-                    setFetchUI(running = false)
-                }
+                mainHandler.post { toast("抓取失敗：${e.message}"); setFetchUI(running = false) }
             }
         }
     }
 
     private fun stopFetch() {
-        fetchJob?.cancel()
-        fetchJob = null
-        WikiFetcher.onProgress = null
-        setFetchUI(running = false)
-        _b?.tvFetchProgress?.text = "已停止"
-        refreshDbStats()
+        fetchJob?.cancel(); fetchJob = null; WikiFetcher.onProgress = null
+        setFetchUI(running = false); _b?.tvFetchProgress?.text = "已停止"; refreshDbStats()
     }
 
     private fun setFetchUI(running: Boolean) {
         val binding = _b ?: return
         binding.btnFetchLandmarks?.isEnabled = !running
-        binding.btnStopFetch?.visibility =
-            if (running) View.VISIBLE else View.GONE
-        binding.progressFetch?.visibility =
-            if (running) View.VISIBLE else View.GONE
-        binding.tvFetchProgress?.visibility =
-            if (running) View.VISIBLE else View.GONE
+        binding.btnStopFetch?.visibility  = if (running) View.VISIBLE else View.GONE
+        binding.progressFetch?.visibility = if (running) View.VISIBLE else View.GONE
+        binding.tvFetchProgress?.visibility = if (running) View.VISIBLE else View.GONE
     }
 
-    // ── CSV export ─────────────────────────────────────────────────────────────
+    // ── Export ────────────────────────────────────────────────────────────────
 
     private fun exportCsv() {
         val ctx = context ?: return
         _b?.tvCsvStatus?.visibility = View.VISIBLE
         _b?.tvCsvStatus?.text = "匯出中…"
         _b?.btnExportCsv?.isEnabled = false
-
         lifecycleScope.launch {
             val uri = CsvHelper.exportToCsv(ctx)
             val binding = _b ?: return@launch
             binding.btnExportCsv?.isEnabled = true
-
-            if (uri == null) {
-                binding.tvCsvStatus?.text = "⚠️ 資料庫是空的，無法匯出"
-                return@launch
-            }
-
+            if (uri == null) { binding.tvCsvStatus?.text = "⚠️ 資料庫是空的，無法匯出"; return@launch }
             binding.tvCsvStatus?.text = "✅ 匯出完成，選擇傳送方式…"
-
-            // Share the file — user can choose Google Drive, Files, AirDrop, etc.
-            val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                type = "text/csv"
-                putExtra(Intent.EXTRA_STREAM, uri)
-                putExtra(Intent.EXTRA_SUBJECT, "PikminGPSMocker 地標資料")
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-            startActivity(Intent.createChooser(shareIntent, "匯出 CSV 到…"))
+            startActivity(Intent.createChooser(
+                Intent(Intent.ACTION_SEND).apply {
+                    type = "text/csv"
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    putExtra(Intent.EXTRA_SUBJECT, "PikminGPSMocker 地標資料")
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }, "匯出 CSV 到…"
+            ))
         }
     }
 
-    // ── CSV import ─────────────────────────────────────────────────────────────
+    // ── Import ────────────────────────────────────────────────────────────────
 
     private fun openCsvPicker() {
-        val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+        csvPickerLauncher.launch(Intent(Intent.ACTION_GET_CONTENT).apply {
             type = "*/*"
-            // Accept CSV and plain text
-            putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("text/csv", "text/plain", "application/octet-stream"))
+            putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("text/csv","text/plain","application/octet-stream"))
             addCategory(Intent.CATEGORY_OPENABLE)
-        }
-        csvPickerLauncher.launch(intent)
+        })
     }
 
     private fun importCsv(uri: android.net.Uri) {
@@ -253,45 +198,37 @@ class SettingsFragment : Fragment() {
         _b?.tvCsvStatus?.visibility = View.VISIBLE
         _b?.tvCsvStatus?.text = "匯入中…"
         _b?.btnImportCsv?.isEnabled = false
-
         lifecycleScope.launch {
-            val result  = CsvHelper.importFromCsv(ctx, uri)
+            val r = CsvHelper.importFromCsv(ctx, uri)
             val binding = _b ?: return@launch
             binding.btnImportCsv?.isEnabled = true
-
-            val msg = buildString {
-                append("✅ 匯入完成\n")
-                append("新增：${result.inserted} 筆  ")
-                append("略過（重複）：${result.skipped} 筆")
-                if (result.errors > 0) append("  錯誤：${result.errors} 筆")
+            binding.tvCsvStatus?.text = buildString {
+                append("✅ 匯入完成\n新增：${r.inserted} 筆  略過（重複）：${r.skipped} 筆")
+                if (r.errors > 0) append("  錯誤：${r.errors} 筆")
             }
-            binding.tvCsvStatus?.text = msg
-
             refreshDbStats()
         }
     }
 
-    // ── DB stats ───────────────────────────────────────────────────────────────
+    // ── DB stats ──────────────────────────────────────────────────────────────
 
     private fun refreshDbStats() {
         val ctx = context ?: return
         lifecycleScope.launch {
-            val count   = WikiLandmarkHelper.dbCount(ctx)
-            val stats   = WikiLandmarkHelper.dbStats(ctx)
+            val count = WikiLandmarkHelper.dbCount(ctx)
+            val stats = WikiLandmarkHelper.dbStats(ctx)
             val binding = _b ?: return@launch
-            if (count == 0) {
-                binding.tvLandmarkDbStats?.text = "資料庫：空（點下方按鈕從 Wikipedia 抓取）"
-            } else {
-                val detail = stats.joinToString("  ") { "${it.continent}:${it.cnt}" }
-                binding.tvLandmarkDbStats?.text = "資料庫：共 $count 個地點\n$detail"
-            }
+            binding.tvLandmarkDbStats?.text = if (count == 0)
+                "資料庫：空（點下方按鈕從 Wikipedia 抓取）"
+            else
+                "資料庫：共 $count 個地點\n${stats.joinToString("  ") { "${it.continent}:${it.cnt}" }}"
         }
     }
 
-    // ── Helpers ────────────────────────────────────────────────────────────────
+    // ── Helpers ───────────────────────────────────────────────────────────────
 
     private fun updateSpeedLabel(mps: Double) {
-        val tag = when {
+        _b?.tvSpeedValue?.text = "${"%.1f".format(mps)} m/s  " + when {
             mps < 1.0  -> "🐢 爬行"
             mps < 2.0  -> "🚶 步行"
             mps < 4.0  -> "🏃 慢跑"
@@ -299,21 +236,13 @@ class SettingsFragment : Fragment() {
             mps < 14.0 -> "🚗 開車"
             else       -> "✈️ 飛行"
         }
-        _b?.tvSpeedValue?.text = "${"%.1f".format(mps)} m/s  $tag"
     }
 
-    private fun sliderToSpeed(p: Int): Double = 0.5 * Math.pow(40.0, p / 100.0)
-    private fun speedToSlider(spd: Double): Int =
-        (Math.log(spd / 0.5) / Math.log(40.0) * 100).toInt().coerceIn(0, 100)
+    private fun sliderToSpeed(p: Int) = 0.5 * Math.pow(40.0, p / 100.0)
+    private fun speedToSlider(s: Double) =
+        (Math.log(s / 0.5) / Math.log(40.0) * 100).toInt().coerceIn(0, 100)
 
-    private fun toast(m: String) {
-        val ctx = context ?: return
-        Toast.makeText(ctx, m, Toast.LENGTH_SHORT).show()
-    }
+    private fun toast(m: String) { context?.let { Toast.makeText(it, m, Toast.LENGTH_SHORT).show() } }
 
-    override fun onDestroyView() {
-        WikiFetcher.onProgress = null
-        _b = null
-        super.onDestroyView()
-    }
+    override fun onDestroyView() { WikiFetcher.onProgress = null; _b = null; super.onDestroyView() }
 }
