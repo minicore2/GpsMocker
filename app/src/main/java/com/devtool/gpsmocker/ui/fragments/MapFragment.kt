@@ -105,6 +105,14 @@ class MapFragment : Fragment() {
         // Restore running state indicator if service is already running
         if (svc?.isRunning == true) setRunning(true)
         vm.sessionSteps.observe(viewLifecycleOwner) { /* stats fragment handles display */ }
+        // Observe map jump requests from SettingsFragment (user changed start-from option)
+        vm.mapJumpRequest.observe(viewLifecycleOwner) { point ->
+            if (point != null) {
+                b?.mapView?.controller?.animateTo(point)
+                b?.mapView?.controller?.setZoom(16.0)
+                vm.mapJumpRequest.value = null  // consume the event
+            }
+        }
     }
 
     override fun onResume() {
@@ -153,19 +161,47 @@ class MapFragment : Fragment() {
                     b?.mapView?.controller?.setCenter(last)
                     b?.mapView?.controller?.setZoom(16.0)
                 }
-                // If no last position yet, keep default centre
+                // No last position yet → keep default Taipei 101
             }
             AppPrefs.StartFrom.DEVICE_GPS -> {
-                // getDeviceGpsPosition() reads last-known location synchronously —
-                // fast enough for UI init, no need for a coroutine here.
+                // Try fast path (cached last-known location — no ANR risk)
                 val gps = getDeviceGpsPosition()
                 if (gps != null) {
                     b?.mapView?.controller?.setCenter(gps)
                     b?.mapView?.controller?.setZoom(16.0)
+                } else {
+                    // No cached location — request a single live fix.
+                    // Result arrives via mapJumpRequest observer above.
+                    requestLiveGpsFix(ctx)
                 }
             }
             AppPrefs.StartFrom.NONE -> {
-                // Keep default centre (Taipei 101) — no action needed
+                // Use default centre (Taipei 101) — no action needed
+            }
+        }
+    }
+
+    /**
+     * Request a single live GPS fix and deliver the result via
+     * vm.requestMapJump() so the mapJumpRequest observer handles the pan.
+     */
+    private fun requestLiveGpsFix(ctx: android.content.Context) {
+        if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.ACCESS_FINE_LOCATION)
+            != PackageManager.PERMISSION_GRANTED) return
+        val lm = ctx.getSystemService(android.location.LocationManager::class.java)
+        val listener = object : android.location.LocationListener {
+            override fun onLocationChanged(loc: android.location.Location) {
+                vm.requestMapJump(GeoPoint(loc.latitude, loc.longitude))
+                lm.removeUpdates(this)
+            }
+        }
+        try {
+            lm.requestSingleUpdate(android.location.LocationManager.GPS_PROVIDER, listener, null)
+        } catch (e: Exception) {
+            try {
+                lm.requestSingleUpdate(android.location.LocationManager.NETWORK_PROVIDER, listener, null)
+            } catch (e2: Exception) {
+                android.util.Log.w("MapFragment", "requestLiveGpsFix failed: ${e2.message}")
             }
         }
     }

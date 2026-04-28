@@ -28,6 +28,17 @@ class SharedViewModel(private val app: android.app.Application) : AndroidViewMod
     val segmentText   = MutableLiveData("")
     val sessionDistM  = MutableLiveData(0.0)
 
+    /**
+     * Emits a GeoPoint whenever the user selects a new start-from option in Settings.
+     * MapFragment observes this and immediately pans the map to that point.
+     * null = no jump needed.
+     */
+    val mapJumpRequest = MutableLiveData<GeoPoint?>()
+
+    fun requestMapJump(point: GeoPoint?) {
+        mapJumpRequest.postValue(point)
+    }
+
     // ── Step batching ─────────────────────────────
     private var pendingWrite = 0
     private var windowStart  = Instant.now()

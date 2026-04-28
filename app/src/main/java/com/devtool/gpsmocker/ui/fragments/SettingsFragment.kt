@@ -11,7 +11,13 @@ import androidx.health.connect.client.PermissionController
 import androidx.lifecycle.lifecycleScope
 import com.devtool.gpsmocker.databinding.FragmentSettingsBinding
 import com.devtool.gpsmocker.ui.SharedViewModel
+import android.Manifest
+import android.content.pm.PackageManager
+import android.location.LocationListener
+import android.location.LocationManager
+import androidx.core.content.ContextCompat
 import com.devtool.gpsmocker.utils.*
+import org.osmdroid.util.GeoPoint
 import kotlinx.coroutines.*
 
 class SettingsFragment : Fragment() {
@@ -88,11 +94,35 @@ class SettingsFragment : Fragment() {
 
         binding.rgStartFrom.setOnCheckedChangeListener { _, id ->
             val ctx = context ?: return@setOnCheckedChangeListener
-            AppPrefs.saveStartFrom(ctx, when (id) {
+            val sf = when (id) {
                 binding.rbStartLast.id -> AppPrefs.StartFrom.LAST_POSITION
                 binding.rbStartGPS.id  -> AppPrefs.StartFrom.DEVICE_GPS
                 else                   -> AppPrefs.StartFrom.NONE
-            })
+            }
+            AppPrefs.saveStartFrom(ctx, sf)
+
+            // Immediately jump the map to the selected position
+            when (sf) {
+                AppPrefs.StartFrom.LAST_POSITION -> {
+                    val last = LastPositionStore.load(ctx)
+                    if (last != null) vm.requestMapJump(last)
+                    else toast("尚無上次位置記錄")
+                }
+                AppPrefs.StartFrom.DEVICE_GPS -> {
+                    // Try fast path first (last-known), then request live fix
+                    val fast = getLastKnownGps(ctx)
+                    if (fast != null) {
+                        vm.requestMapJump(fast)
+                    } else {
+                        toast("正在取得 GPS 位置…")
+                        requestLiveGps(ctx)
+                    }
+                }
+                AppPrefs.StartFrom.NONE -> {
+                    // Jump back to default (Taipei 101)
+                    vm.requestMapJump(GeoPoint(25.0330, 121.5654))
+                }
+            }
         }
 
         binding.rgStepBackend.setOnCheckedChangeListener { _, id ->
@@ -241,6 +271,42 @@ class SettingsFragment : Fragment() {
     private fun sliderToSpeed(p: Int) = 0.5 * Math.pow(40.0, p / 100.0)
     private fun speedToSlider(s: Double) =
         (Math.log(s / 0.5) / Math.log(40.0) * 100).toInt().coerceIn(0, 100)
+
+    /** Fast path: returns cached GPS location without blocking */
+    private fun getLastKnownGps(ctx: android.content.Context): GeoPoint? {
+        if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.ACCESS_FINE_LOCATION)
+            != PackageManager.PERMISSION_GRANTED) return null
+        val lm  = ctx.getSystemService(LocationManager::class.java)
+        val loc = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER)
+            ?: lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+            ?: lm.getLastKnownLocation(LocationManager.PASSIVE_PROVIDER)
+        return loc?.let { GeoPoint(it.latitude, it.longitude) }
+    }
+
+    /**
+     * Request a single live GPS fix (fires once, then removes itself).
+     * Used as fallback when getLastKnownLocation returns null.
+     */
+    private fun requestLiveGps(ctx: android.content.Context) {
+        if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.ACCESS_FINE_LOCATION)
+            != PackageManager.PERMISSION_GRANTED) {
+            toast("需要位置權限才能取得目前 GPS"); return
+        }
+        val lm = ctx.getSystemService(LocationManager::class.java)
+        val listener = object : LocationListener {
+            override fun onLocationChanged(loc: android.location.Location) {
+                vm.requestMapJump(GeoPoint(loc.latitude, loc.longitude))
+                lm.removeUpdates(this)
+            }
+        }
+        try {
+            lm.requestSingleUpdate(LocationManager.GPS_PROVIDER, listener, null)
+        } catch (e: Exception) {
+            // Fallback to network provider
+            try { lm.requestSingleUpdate(LocationManager.NETWORK_PROVIDER, listener, null) }
+            catch (e2: Exception) { toast("無法取得 GPS 位置") }
+        }
+    }
 
     private fun toast(m: String) { context?.let { Toast.makeText(it, m, Toast.LENGTH_SHORT).show() } }
 
